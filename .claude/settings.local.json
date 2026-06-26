@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm install *)",
+      "PowerShell(npx shadcn@latest add button card badge table input label select separator skeleton alert 2>&1)",
+      "PowerShell(npx shadcn@latest add button card badge table input label select separator skeleton alert --yes 2>&1)",
+      "PowerShell(npx tsc --noEmit 2>&1)",
+      "PowerShell(npm run *)",
+      "PowerShell(supabase *)"
+    ]
+  }
+}

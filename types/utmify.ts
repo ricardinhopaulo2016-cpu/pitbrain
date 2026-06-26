@@ -1,0 +1,49 @@
+export interface UtmifyRawRow {
+  order_id?: string
+  order_date?: string
+  product_name?: string
+  status?: string
+  payment_method?: string
+  gross_revenue?: string
+  net_revenue?: string
+  refunded?: string
+  utm_source?: string
+  utm_medium?: string
+  utm_campaign?: string
+  utm_term?: string
+  utm_content?: string
+  campaign_id?: string
+  adset_id?: string
+  ad_id?: string
+  country?: string
+  page_views?: string
+  sessions?: string
+  initiate_checkouts?: string
+  [key: string]: string | undefined
+}
+
+export interface UtmifySession {
+  orderId: string
+  orderDate: string | null
+  productName: string | null
+  status: string
+  paymentMethod: string | null
+  grossRevenue: number
+  netRevenue: number
+  utmSource: string | null
+  utmMedium: string | null
+  utmCampaign: string | null
+  utmTerm: string | null
+  utmContent: string | null
+  campaignId: string | null
+  adsetId: string | null
+  adId: string | null
+  pageViews: number
+  initiateCheckouts: number
+}
+
+export interface UtmifyParseResult {
+  rows: UtmifySession[]
+  missingColumns: string[]
+  unmappedHeaders: string[]
+}

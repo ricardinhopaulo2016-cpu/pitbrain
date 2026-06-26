@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+:root {
+  --background: #070712;
+  --foreground: #F8FAFC;
+  --card: #111122;
+  --card-foreground: #F8FAFC;
+  --border: #2A2A40;
+  --input: #2A2A40;
+  --primary: #7C3AED;
+  --primary-foreground: #F8FAFC;
+  --secondary: #17172A;
+  --secondary-foreground: #94A3B8;
+  --muted: #17172A;
+  --muted-foreground: #94A3B8;
+  --accent: #17172A;
+  --accent-foreground: #F8FAFC;
+  --destructive: #EF4444;
+  --destructive-foreground: #F8FAFC;
+  --ring: #7C3AED;
+  --radius: 0.5rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@theme {
+  --color-pb-bg: #070712;
+  --color-pb-card: #111122;
+  --color-pb-card-alt: #17172A;
+  --color-pb-purple: #7C3AED;
+  --color-pb-blue: #38BDF8;
+  --color-pb-green: #22C55E;
+  --color-pb-yellow: #FACC15;
+  --color-pb-red: #EF4444;
+  --color-pb-text: #F8FAFC;
+  --color-pb-muted: #94A3B8;
+  --color-pb-border: #2A2A40;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans, Arial, sans-serif);
+}
+
+* {
+  border-color: var(--border);
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #070712;
+}
+::-webkit-scrollbar-thumb {
+  background: #2A2A40;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a55;
+}
