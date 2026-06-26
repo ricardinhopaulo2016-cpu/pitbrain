@@ -235,8 +235,7 @@ export default function UploadPage() {
             <CsvDropzone
               label="CSV do Meta Ads"
               description="Exportação do Gerenciador de Anúncios (nível campanha, conjunto ou anúncio)"
-              accept=".csv"
-              acceptHint=".csv"
+              accept=".csv,text/csv"
               onFileSelected={setMetaFile}
               selectedFile={metaFile}
             />
@@ -249,8 +248,8 @@ export default function UploadPage() {
             <CsvDropzone
               label="CSV/XLSX da UTMify"
               description="Relatório de pedidos ou relatório agregado diário"
-              accept=".csv,.xlsx,.xls"
-              acceptHint=".csv, .xlsx, .xls"
+              accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+              acceptHint="Arraste um .csv, .xlsx ou .xls ou clique para selecionar"
               onFileSelected={setUtmifyFile}
               selectedFile={utmifyFile}
             />

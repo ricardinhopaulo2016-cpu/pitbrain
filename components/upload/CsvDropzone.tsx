@@ -26,7 +26,11 @@ export function CsvDropzone({
 
   function isAccepted(file: File): boolean {
     const ext = '.' + (file.name.split('.').pop()?.toLowerCase() ?? '')
-    return accept.split(',').some(a => a.trim() === ext)
+    // Only validate against extension tokens (ignore MIME type tokens in accept string)
+    return accept.split(',').some(a => {
+      const token = a.trim()
+      return token.startsWith('.') && token === ext
+    })
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -40,7 +44,10 @@ export function CsvDropzone({
     onFileSelected(e.target.files?.[0] ?? null)
   }
 
-  const hint = acceptHint ?? accept.split(',').map(a => a.trim()).join(', ')
+  // Derive visible format list from extension-only tokens (exclude MIME types)
+  const extTokens = accept.split(',').filter(a => a.trim().startsWith('.')).map(a => a.trim()).join(', ')
+  const dragText = acceptHint ?? 'Arraste um arquivo ou clique para selecionar'
+  const formatHint = extTokens
 
   return (
     <div
@@ -93,8 +100,8 @@ export function CsvDropzone({
             <p className="font-semibold text-pb-text text-sm">{label}</p>
             {description && <p className="text-xs text-pb-muted mt-1">{description}</p>}
           </div>
-          <p className="text-xs text-pb-border">Arraste um arquivo ou clique para selecionar</p>
-          <p className="text-xs text-pb-border/70">{hint}</p>
+          <p className="text-xs text-pb-border">{dragText}</p>
+          {formatHint && <p className="text-xs text-pb-border/70">{formatHint}</p>}
         </div>
       )}
     </div>
