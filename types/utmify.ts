@@ -40,10 +40,40 @@ export interface UtmifySession {
   adId: string | null
   pageViews: number
   initiateCheckouts: number
+  sourceType: 'utmify_orders'
 }
 
-export interface UtmifyParseResult {
-  rows: UtmifySession[]
-  missingColumns: string[]
-  unmappedHeaders: string[]
+export interface UtmifyDailyRow {
+  date: string | null
+  purchases: number
+  spend: number
+  revenue: number
+  profit: number | null
+  roas: number | null
+  cpa: number | null
+  cpc: number | null
+  ctr: number | null
+  cpm: number | null
+  roi: number | null
+  margin: number | null
+  initiateCheckout: number | null
+  cpi: number | null
+  clicks: number | null
+  impressions: number | null
+  pageViews: number | null
+  sourceType: 'utmify_daily_aggregate'
 }
+
+export type UtmifyParseResult =
+  | {
+      sourceType: 'utmify_orders'
+      rows: UtmifySession[]
+      missingColumns: string[]
+      unmappedHeaders: string[]
+    }
+  | {
+      sourceType: 'utmify_daily_aggregate'
+      rows: UtmifyDailyRow[]
+      missingColumns: string[]
+      unmappedHeaders: string[]
+    }

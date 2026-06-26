@@ -1,5 +1,4 @@
 // Flexible column normalizer for UTMify CSVs.
-// Tries exact match → contains match → word-overlap match for each canonical column.
 
 export const COLUMN_LABELS: Record<string, string> = {
   order_id: 'ID do pedido',
@@ -22,7 +21,27 @@ export const COLUMN_LABELS: Record<string, string> = {
   initiate_checkouts: 'Checkouts iniciados',
 }
 
-// Columns shown in the missing-columns alert in the UI
+export const DAILY_COLUMN_LABELS: Record<string, string> = {
+  date: 'Data',
+  purchases: 'Vendas',
+  spend: 'Gastos',
+  revenue: 'Faturamento',
+  profit: 'Lucro',
+  roas: 'ROAS',
+  cpa: 'CPA',
+  cpc: 'CPC',
+  ctr: 'CTR',
+  cpm: 'CPM',
+  roi: 'ROI',
+  margin: 'Margem',
+  ic: 'IC (Initiate Checkout)',
+  cpi: 'CPI',
+  clicks: 'Cliques',
+  impressions: 'Impressões',
+  page_views: 'Vis. de pág.',
+}
+
+// Columns shown in the missing-columns alert for orders mode
 export const EXPECTED_COLUMNS = [
   'order_date',
   'gross_revenue',
@@ -36,7 +55,9 @@ export const EXPECTED_COLUMNS = [
   'ad_id',
 ]
 
-// Aliases per canonical column (all lowercase, accent-free)
+// Required columns for daily aggregate mode
+export const DAILY_EXPECTED_COLUMNS = ['date', 'purchases', 'spend', 'revenue']
+
 const COLUMN_ALIASES: Record<string, string[]> = {
   order_id: [
     'order_id', 'id_pedido', 'id do pedido', 'pedido', 'order', 'numero_pedido',
@@ -44,7 +65,7 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   ],
   order_date: [
     'order_date', 'data', 'data_pedido', 'data do pedido', 'date', 'data_compra',
-    'data compra', 'created_at', 'purchase_date', 'dt', 'dia', 'data_venda',
+    'data compra', 'created_at', 'purchase_date', 'dt', 'data_venda',
     'data venda', 'data_criacao', 'data criacao',
   ],
   product_name: [
@@ -70,8 +91,7 @@ const COLUMN_ALIASES: Record<string, string[]> = {
     'net', 'valor_liquido', 'valor liquido', 'liquido',
   ],
   utm_source: [
-    'utm_source', 'utmsource', 'utm source', 'source', 'origem', 'src',
-    'utm-source',
+    'utm_source', 'utmsource', 'utm source', 'source', 'origem', 'src', 'utm-source',
   ],
   utm_medium: [
     'utm_medium', 'utmmedium', 'utm medium', 'medium', 'midia', 'utm-medium',
@@ -114,19 +134,40 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   ],
 }
 
+// Aliases for UTMify daily aggregate report columns
+const DAILY_AGGREGATE_ALIASES: Record<string, string[]> = {
+  date: ['data', 'dia', 'date', 'day'],
+  purchases: ['vendas', 'purchases', 'conversoes', 'conversions', 'pedidos', 'orders', 'vendas aprovadas'],
+  spend: ['gastos', 'spend', 'investimento', 'investment', 'custo', 'cost', 'valor investido', 'gasto'],
+  revenue: ['faturamento', 'receita', 'revenue', 'receita bruta', 'gross revenue', 'fat'],
+  profit: ['lucro', 'profit'],
+  roas: ['roas'],
+  cpa: ['cpa'],
+  cpc: ['cpc'],
+  ctr: ['ctr'],
+  cpm: ['cpm'],
+  roi: ['roi'],
+  margin: ['margem', 'margin'],
+  ic: ['ic', 'initiate checkout', 'initiate_checkout', 'checkouts iniciados', 'inicio checkout'],
+  cpi: ['cpi'],
+  clicks: ['cliques', 'clicks'],
+  impressions: ['impressoes', 'impressions', 'impr'],
+  page_views: ['vis de pag', 'vis pag', 'visualizacoes', 'page views', 'page_views', 'visitas de pagina'],
+}
+
 function normalize(str: string): string {
   return str
     .toLowerCase()
     .trim()
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '') // strip accents
-    .replace(/[^a-z0-9\s_]/g, ' ')   // non-alphanum → space
-    .replace(/\s+/g, ' ')             // collapse whitespace
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s_]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
 export interface NormalizerResult {
-  /** canonical column name → actual CSV header (null = not found) */
+  /** canonical column name → actual CSV header */
   mapping: Record<string, string | null>
   /** expected columns absent from the file */
   missingColumns: string[]
@@ -134,16 +175,20 @@ export interface NormalizerResult {
   unmappedHeaders: string[]
 }
 
-export function detectColumnMapping(headers: string[]): NormalizerResult {
+function buildMapping(
+  headers: string[],
+  aliases: Record<string, string[]>,
+  expectedCols: string[]
+): NormalizerResult {
   const normalizedHeaders = headers.map(h => ({ original: h, normalized: normalize(h) }))
   const usedOriginals = new Set<string>()
   const mapping: Record<string, string | null> = {}
 
-  for (const [canonical, aliases] of Object.entries(COLUMN_ALIASES)) {
+  for (const [canonical, aliasList] of Object.entries(aliases)) {
     let found: string | null = null
 
-    // Pass 1 — exact match after normalization
-    for (const alias of aliases) {
+    // Pass 1 — exact match
+    for (const alias of aliasList) {
       const target = normalize(alias)
       const hit = normalizedHeaders.find(
         h => !usedOriginals.has(h.original) && h.normalized === target
@@ -151,11 +196,11 @@ export function detectColumnMapping(headers: string[]): NormalizerResult {
       if (hit) { found = hit.original; usedOriginals.add(hit.original); break }
     }
 
-    // Pass 2 — one fully contains the other (avoids partial-word false positives on short keys)
+    // Pass 2 — one contains the other
     if (!found) {
-      for (const alias of aliases) {
+      for (const alias of aliasList) {
         const target = normalize(alias)
-        if (target.length < 3) continue // skip single-letter / too-short aliases
+        if (target.length < 3) continue
         const hit = normalizedHeaders.find(h => {
           if (usedOriginals.has(h.original)) return false
           return h.normalized.includes(target) || target.includes(h.normalized)
@@ -164,9 +209,9 @@ export function detectColumnMapping(headers: string[]): NormalizerResult {
       }
     }
 
-    // Pass 3 — word-overlap: every word in the alias appears in the header
+    // Pass 3 — word-overlap
     if (!found) {
-      for (const alias of aliases) {
+      for (const alias of aliasList) {
         const words = normalize(alias).split(' ').filter(w => w.length > 2)
         if (words.length === 0) continue
         const hit = normalizedHeaders.find(h => {
@@ -180,11 +225,28 @@ export function detectColumnMapping(headers: string[]): NormalizerResult {
     mapping[canonical] = found
   }
 
-  const missingColumns = EXPECTED_COLUMNS.filter(col => mapping[col] === null)
-
+  const missingColumns = expectedCols.filter(col => !mapping[col])
   const unmappedHeaders = normalizedHeaders
     .filter(h => !usedOriginals.has(h.original))
     .map(h => h.original)
 
   return { mapping, missingColumns, unmappedHeaders }
+}
+
+export function detectColumnMapping(headers: string[]): NormalizerResult {
+  return buildMapping(headers, COLUMN_ALIASES, EXPECTED_COLUMNS)
+}
+
+export function detectDailyAggregateMapping(headers: string[]): NormalizerResult {
+  return buildMapping(headers, DAILY_AGGREGATE_ALIASES, DAILY_EXPECTED_COLUMNS)
+}
+
+// Returns true when the file looks like a UTMify daily aggregate report.
+export function detectIsDailyAggregate(headers: string[]): boolean {
+  const MARKERS = ['vendas', 'gastos', 'faturamento', 'lucro', 'roas', 'margem', 'roi']
+  const normalizedHeaders = headers.map(h => normalize(h))
+  const hits = MARKERS.filter(marker =>
+    normalizedHeaders.some(h => h === marker || h.includes(marker))
+  )
+  return hits.length >= 2
 }

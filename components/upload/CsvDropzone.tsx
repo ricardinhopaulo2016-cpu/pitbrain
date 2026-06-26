@@ -7,24 +7,40 @@ import { Upload, X, FileText, CheckCircle2 } from 'lucide-react'
 interface CsvDropzoneProps {
   label: string
   description?: string
+  accept?: string
+  acceptHint?: string
   onFileSelected: (file: File | null) => void
   selectedFile: File | null
 }
 
-export function CsvDropzone({ label, description, onFileSelected, selectedFile }: CsvDropzoneProps) {
+export function CsvDropzone({
+  label,
+  description,
+  accept = '.csv',
+  acceptHint,
+  onFileSelected,
+  selectedFile,
+}: CsvDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
+
+  function isAccepted(file: File): boolean {
+    const ext = '.' + (file.name.split('.').pop()?.toLowerCase() ?? '')
+    return accept.split(',').some(a => a.trim() === ext)
+  }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragging(false)
     const file = e.dataTransfer.files[0]
-    if (file && file.name.endsWith('.csv')) onFileSelected(file)
+    if (file && isAccepted(file)) onFileSelected(file)
   }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     onFileSelected(e.target.files?.[0] ?? null)
   }
+
+  const hint = acceptHint ?? accept.split(',').map(a => a.trim()).join(', ')
 
   return (
     <div
@@ -44,7 +60,7 @@ export function CsvDropzone({ label, description, onFileSelected, selectedFile }
       <input
         ref={inputRef}
         type="file"
-        accept=".csv"
+        accept={accept}
         className="hidden"
         onChange={handleChange}
       />
@@ -52,7 +68,7 @@ export function CsvDropzone({ label, description, onFileSelected, selectedFile }
       {selectedFile ? (
         <div className="flex items-center justify-center gap-3">
           <CheckCircle2 className="h-5 w-5 text-pb-green shrink-0" />
-          <span className="text-sm font-medium text-pb-text">{selectedFile.name}</span>
+          <span className="text-sm font-medium text-pb-text truncate max-w-[180px]">{selectedFile.name}</span>
           <span className="text-xs text-pb-muted">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
           <button
             type="button"
@@ -77,7 +93,8 @@ export function CsvDropzone({ label, description, onFileSelected, selectedFile }
             <p className="font-semibold text-pb-text text-sm">{label}</p>
             {description && <p className="text-xs text-pb-muted mt-1">{description}</p>}
           </div>
-          <p className="text-xs text-pb-border">Arraste um .csv ou clique para selecionar</p>
+          <p className="text-xs text-pb-border">Arraste um arquivo ou clique para selecionar</p>
+          <p className="text-xs text-pb-border/70">{hint}</p>
         </div>
       )}
     </div>

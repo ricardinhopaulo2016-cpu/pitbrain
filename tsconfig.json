@@ -19,6 +19,7 @@
       }
     ],
     "paths": {
+      "@radix-ui/react-select": ["./node_modules/@radix-ui/react-select/dist/index.d.ts"],
       "@/*": ["./*"]
     }
   },

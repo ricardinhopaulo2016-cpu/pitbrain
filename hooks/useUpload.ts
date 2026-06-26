@@ -9,6 +9,7 @@ interface UploadResult {
   sessionId: string
   metaCount: number
   utmifyCount: number
+  utmifySourceType: string | null
   warnings: string[]
   utmifyMissingColumns: string[]
 }
