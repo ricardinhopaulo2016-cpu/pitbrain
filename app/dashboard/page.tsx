@@ -32,8 +32,9 @@ function DashboardSkeleton() {
 
 export default function DashboardPage() {
   const { sessionId } = useSessionStore()
-  const { metrics, loading, error } = useMetrics()
+  const { metrics, loading, error, debugError } = useMetrics()
   const router = useRouter()
+  const isDev = process.env.NODE_ENV === 'development'
 
   if (!sessionId) {
     return (
@@ -59,10 +60,31 @@ export default function DashboardPage() {
 
   if (error || !metrics) {
     return (
-      <PageShell>
-        <div className="bg-pb-red/10 border border-pb-red/30 rounded-xl p-4 flex items-center gap-3">
-          <AlertTriangle className="h-4 w-4 text-pb-red shrink-0" />
-          <p className="text-pb-red text-sm">{error ?? 'Erro ao carregar métricas.'}</p>
+      <PageShell className="space-y-4">
+        <div className="bg-pb-red/10 border border-pb-red/30 rounded-xl p-5 space-y-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 text-pb-red shrink-0" />
+            <p className="text-pb-red font-medium text-sm">
+              {error ?? 'Não foi possível carregar os dados importados.'}
+            </p>
+          </div>
+          <p className="text-xs text-pb-muted pl-8">
+            Verifique se o arquivo foi importado corretamente e tente novamente.
+          </p>
+          {isDev && debugError && (
+            <pre className="text-xs text-pb-muted bg-pb-card-alt rounded-lg p-3 overflow-x-auto pl-8">
+              {debugError}
+            </pre>
+          )}
+          <div className="pl-8">
+            <button
+              onClick={() => router.push('/upload')}
+              className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 text-white font-medium px-4 py-2 rounded-xl text-sm transition-all"
+            >
+              <Upload className="h-4 w-4" />
+              Voltar para Upload
+            </button>
+          </div>
         </div>
       </PageShell>
     )
