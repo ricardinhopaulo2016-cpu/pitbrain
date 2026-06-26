@@ -7,7 +7,7 @@ import {
   EXPECTED_COLUMNS,
   DAILY_EXPECTED_COLUMNS,
 } from './normalizer'
-import { parseMonetaryValue, parseNumericValue } from '@/lib/utils'
+import { parseMonetaryValue, parseNumericValue, parseCountValue } from '@/lib/utils'
 
 function parseOrders(
   data: Record<string, string>[],
@@ -42,8 +42,8 @@ function parseOrders(
         campaignId: get(rawRow, 'campaign_id') || null,
         adsetId: get(rawRow, 'adset_id') || null,
         adId: get(rawRow, 'ad_id') || null,
-        pageViews: parseNumericValue(get(rawRow, 'page_views')),
-        initiateCheckouts: parseNumericValue(get(rawRow, 'initiate_checkouts')),
+        pageViews: parseCountValue(get(rawRow, 'page_views')),
+        initiateCheckouts: parseCountValue(get(rawRow, 'initiate_checkouts')),
         sourceType: 'utmify_orders',
       }
     })
@@ -63,15 +63,25 @@ function parseDailyAggregate(
     return header ? (row[header] ?? '') : ''
   }
 
+  // For ratio/rate fields (ROAS, CTR, ROI, margin) — may have decimal places
   function numOrNull(raw: string): number | null {
     if (!raw.trim()) return null
     const v = parseNumericValue(raw)
     return isNaN(v) ? null : v
   }
 
+  // For monetary fields (spend, revenue, profit, CPA, CPC, CPM, CPI)
   function monOrNull(raw: string): number | null {
     if (!raw.trim()) return null
     return parseMonetaryValue(raw)
+  }
+
+  // For integer count fields (impressions, clicks, page_views, IC, purchases)
+  // ALL dots/commas are thousands separators — "2.264.000" → 2264000
+  function countOrNull(raw: string): number | null {
+    if (!raw.trim()) return null
+    const v = parseCountValue(raw)
+    return isNaN(v) ? null : v
   }
 
   const rows: UtmifyDailyRow[] = data
@@ -79,28 +89,28 @@ function parseDailyAggregate(
       const spendVal = monOrNull(get(rawRow, 'spend'))
       const revenueVal = monOrNull(get(rawRow, 'revenue'))
       const purchasesRaw = get(rawRow, 'purchases')
-      const purchases = parseNumericValue(purchasesRaw)
+      const purchases = parseCountValue(purchasesRaw)
 
       if (spendVal === null && revenueVal === null && !purchasesRaw.trim()) return null
 
       return {
         date: get(rawRow, 'date') || null,
-        purchases,
-        spend: spendVal ?? 0,
-        revenue: revenueVal ?? 0,
-        profit: monOrNull(get(rawRow, 'profit')),
-        roas: numOrNull(get(rawRow, 'roas')),
-        cpa: monOrNull(get(rawRow, 'cpa')),
-        cpc: monOrNull(get(rawRow, 'cpc')),
-        ctr: numOrNull(get(rawRow, 'ctr')),
-        cpm: monOrNull(get(rawRow, 'cpm')),
-        roi: numOrNull(get(rawRow, 'roi')),
-        margin: numOrNull(get(rawRow, 'margin')),
-        initiateCheckout: numOrNull(get(rawRow, 'ic')),
-        cpi: monOrNull(get(rawRow, 'cpi')),
-        clicks: numOrNull(get(rawRow, 'clicks')),
-        impressions: numOrNull(get(rawRow, 'impressions')),
-        pageViews: numOrNull(get(rawRow, 'page_views')),
+        purchases,                                       // count
+        spend: spendVal ?? 0,                            // monetary
+        revenue: revenueVal ?? 0,                        // monetary
+        profit: monOrNull(get(rawRow, 'profit')),        // monetary
+        roas: numOrNull(get(rawRow, 'roas')),            // ratio (not used for aggregate)
+        cpa: monOrNull(get(rawRow, 'cpa')),              // monetary (not used for aggregate)
+        cpc: monOrNull(get(rawRow, 'cpc')),              // monetary (not used for aggregate)
+        ctr: numOrNull(get(rawRow, 'ctr')),              // ratio   (not used for aggregate)
+        cpm: monOrNull(get(rawRow, 'cpm')),              // monetary (not used for aggregate)
+        roi: numOrNull(get(rawRow, 'roi')),              // ratio   (not used for aggregate)
+        margin: numOrNull(get(rawRow, 'margin')),        // ratio   (not used for aggregate)
+        initiateCheckout: countOrNull(get(rawRow, 'ic')),// count
+        cpi: monOrNull(get(rawRow, 'cpi')),              // monetary (not used for aggregate)
+        clicks: countOrNull(get(rawRow, 'clicks')),      // count
+        impressions: countOrNull(get(rawRow, 'impressions')), // count
+        pageViews: countOrNull(get(rawRow, 'page_views')),    // count
         sourceType: 'utmify_daily_aggregate',
       }
     })

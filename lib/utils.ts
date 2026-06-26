@@ -52,6 +52,22 @@ export function parseMonetaryValue(raw: string | undefined): number {
   return isNaN(parsed) ? 0 : parsed
 }
 
+/**
+ * Parse integer count fields (impressions, clicks, page views, IC, purchases).
+ * ALL dots and commas are treated as thousands separators — these fields are always integers.
+ * "2.264.000" → 2264000  |  "5.420" → 5420  |  "5,420" → 5420
+ */
+export function parseCountValue(raw: string | number | null | undefined): number {
+  if (raw === null || raw === undefined) return 0
+  if (typeof raw === 'number') return isNaN(raw) ? 0 : Math.round(raw)
+  const str = String(raw).replace(/[%\s]/g, '').trim()
+  if (!str) return 0
+  const digits = str.replace(/[^0-9]/g, '')
+  if (!digits) return 0
+  const parsed = parseInt(digits, 10)
+  return isNaN(parsed) ? 0 : parsed
+}
+
 export function parseNumericValue(raw: string | undefined): number {
   if (!raw) return 0
   let cleaned = raw.replace(/[%\s]/g, '').trim()

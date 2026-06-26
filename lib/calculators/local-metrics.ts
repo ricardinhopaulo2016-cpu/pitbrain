@@ -184,14 +184,34 @@ function buildFunnelFromDaily(rows: UtmifyDailyRow[]): FunnelMetrics {
   const pageViews = rows.reduce((s, r) => s + safeNumber(r.pageViews), 0)
   const initiateCheckouts = rows.reduce((s, r) => s + safeNumber(r.initiateCheckout), 0)
 
+  // CTR/CPM/CPC always recalculated from totals — never sum per-day ratios
+  const ctr = safeDivide(clicks, impressions)
+  const cpm = impressions > 0 ? safeDivide(spend, impressions) * 1000 : 0
+  const cpc = safeDivide(spend, clicks)
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[pitbrain:metrics] Daily aggregate totals', {
+      impressoes: impressions,
+      cliques: clicks,
+      pageViews,
+      ic: initiateCheckouts,
+      vendas: purchases,
+      ctrRecalculado: `${(ctr * 100).toFixed(4)}%`,
+      cpmRecalculado: `R$ ${cpm.toFixed(2)}`,
+      cpcRecalculado: `R$ ${cpc.toFixed(2)}`,
+      spend: `R$ ${spend.toFixed(2)}`,
+      revenue: `R$ ${revenue.toFixed(2)}`,
+    })
+  }
+
   return {
     spend,
     revenue,
     roas: safeDivide(revenue, spend),
     cpa: safeDivide(spend, purchases),
-    ctr: safeDivide(clicks, impressions),
-    cpc: safeDivide(spend, clicks),
-    cpm: impressions > 0 ? safeDivide(spend, impressions) * 1000 : 0,
+    ctr,
+    cpc,
+    cpm,
     impressions,
     clicks,
     reach: 0,
