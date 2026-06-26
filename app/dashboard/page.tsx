@@ -7,8 +7,12 @@ import { CampaignTable } from '@/components/dashboard/CampaignTable'
 import { FunnelChart } from '@/components/dashboard/FunnelChart'
 import { RoasTimelineChart } from '@/components/dashboard/RoasTimelineChart'
 import { InsightCard } from '@/components/dashboard/InsightCard'
+import { ValidationSection } from '@/components/dashboard/ValidationSection'
+import { DailyPerformanceTable } from '@/components/dashboard/DailyPerformanceTable'
 import { useMetrics } from '@/hooks/useMetrics'
+import { useLastImport } from '@/hooks/useLastImport'
 import { useSessionStore } from '@/store/sessionStore'
+import { UtmifyDailyRow } from '@/types/utmify'
 import { Brain, Upload, AlertTriangle, TrendingUp, Zap } from 'lucide-react'
 
 function SkeletonCard({ className }: { className?: string }) {
@@ -33,6 +37,7 @@ function DashboardSkeleton() {
 export default function DashboardPage() {
   const { sessionId } = useSessionStore()
   const { metrics, loading, error, debugError } = useMetrics()
+  const lastImport = useLastImport()
   const router = useRouter()
   const isDev = process.env.NODE_ENV === 'development'
 
@@ -232,6 +237,20 @@ export default function DashboardPage() {
           </h2>
           <CampaignTable campaigns={metrics.byCampaign} />
         </div>
+      )}
+
+      {/* Validation Section */}
+      <ValidationSection
+        overall={metrics.overall}
+        summary={lastImport?.summary ?? null}
+        sourceType={lastImport?.sourceType ?? null}
+      />
+
+      {/* Daily Performance Table — only for daily aggregate data */}
+      {lastImport?.sourceType === 'utmify_daily_aggregate' && (
+        <DailyPerformanceTable
+          rows={lastImport.rows as UtmifyDailyRow[]}
+        />
       )}
     </PageShell>
   )
