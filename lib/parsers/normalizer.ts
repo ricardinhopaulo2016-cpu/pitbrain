@@ -39,6 +39,8 @@ export const DAILY_COLUMN_LABELS: Record<string, string> = {
   clicks: 'Cliques',
   impressions: 'Impressões',
   page_views: 'Vis. de pág.',
+  add_to_cart: 'Add To Cart',
+  hook: 'Hook Rate',
 }
 
 // Columns shown in the missing-columns alert for orders mode
@@ -57,6 +59,25 @@ export const EXPECTED_COLUMNS = [
 
 // Required columns for daily aggregate mode
 export const DAILY_EXPECTED_COLUMNS = ['date', 'purchases', 'spend', 'revenue']
+
+// Required columns for UTM breakdown mode (date is not applicable)
+export const BREAKDOWN_EXPECTED_COLUMNS = ['purchases', 'spend', 'revenue']
+
+// Page Views aliases — shared between orders mode (COLUMN_ALIASES) and
+// daily/breakdown mode (DAILY_AGGREGATE_ALIASES) so both recognize UTMify's
+// abbreviated Portuguese header ("VIS. DE PÁG.") the same way. Values are
+// normalized (via `normalize()`) before comparison, so case/accents/punctuation
+// don't need separate entries — e.g. "VIS. DE PÁG." and "Vis de pág" both
+// normalize to "vis de pag".
+const PAGE_VIEWS_ALIASES = [
+  'page_views', 'pageviews', 'page views', 'page view', 'pv',
+  'vis de pag', 'vis pag', 'vis de pagina', 'vis pagina',
+  'visitas de pag', 'visitas de pagina', 'visitas de paginas', 'visitas',
+  'visualizacoes', 'visualizacoes de pagina', 'visualizacoes da pagina',
+  'visualizacoes de paginas', 'visualizacoes da paginas',
+  'visualizacoes de pag', 'visualizacoes da pag',
+  'views',
+]
 
 const COLUMN_ALIASES: Record<string, string[]> = {
   order_id: [
@@ -120,10 +141,7 @@ const COLUMN_ALIASES: Record<string, string[]> = {
     'ad_id', 'adid', 'ad-id', 'id_anuncio', 'id anuncio', 'id do anuncio',
     'anuncio_id', 'ad id',
   ],
-  page_views: [
-    'page_views', 'pageviews', 'page views', 'visualizacoes', 'visualizacoes de pagina',
-    'views', 'visitas', 'page view',
-  ],
+  page_views: PAGE_VIEWS_ALIASES,
   sessions: [
     'sessions', 'sessoes', 'sessao', 'visitas_unicas', 'visitas unicas', 'sessoes unicas',
   ],
@@ -148,15 +166,20 @@ const DAILY_AGGREGATE_ALIASES: Record<string, string[]> = {
   cpm: ['cpm'],
   roi: ['roi'],
   margin: ['margem', 'margin'],
-  ic: ['ic', 'initiate checkout', 'initiate_checkout', 'checkouts iniciados', 'inicio checkout'],
+  ic: ['ic', 'initiate checkout', 'initiate_checkout', 'initiate checkouts', 'initiate_checkouts', 'checkouts iniciados', 'inicio checkout', 'checkout iniciado', 'checkout'],
   cpi: ['cpi'],
   clicks: ['cliques', 'clicks'],
   impressions: ['impressoes', 'impressions', 'impr'],
-  page_views: ['vis de pag', 'vis pag', 'visualizacoes', 'page views', 'page_views', 'visitas de pagina'],
+  page_views: PAGE_VIEWS_ALIASES,
+  add_to_cart: ['add to cart', 'add_to_cart', 'carrinho', 'adicionados ao carrinho', 'atc', 'add ao carrinho'],
+  hook: ['hook', 'taxa de hook', 'hook rate'],
 }
 
 function normalize(str: string): string {
   return str
+    .replace(/^﻿/, '') // strip UTF-8 BOM (most common cause of "Sem nome" / header mismatch)
+    .replace(/\r?\n/g, ' ')
+    .replace(/\t/g, ' ')
     .toLowerCase()
     .trim()
     .normalize('NFD')
@@ -164,6 +187,11 @@ function normalize(str: string): string {
     .replace(/[^a-z0-9\s_]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/** Use as papaparse `transformHeader` to strip BOM and normalize whitespace. */
+export function cleanHeader(h: string): string {
+  return h.replace(/^﻿/, '').replace(/\t/g, ' ').trim()
 }
 
 export interface NormalizerResult {
@@ -241,6 +269,10 @@ export function detectDailyAggregateMapping(headers: string[]): NormalizerResult
   return buildMapping(headers, DAILY_AGGREGATE_ALIASES, DAILY_EXPECTED_COLUMNS)
 }
 
+export function detectBreakdownMapping(headers: string[]): NormalizerResult {
+  return buildMapping(headers, DAILY_AGGREGATE_ALIASES, BREAKDOWN_EXPECTED_COLUMNS)
+}
+
 // Returns true when the file looks like a UTMify daily aggregate report.
 export function detectIsDailyAggregate(headers: string[]): boolean {
   const MARKERS = ['vendas', 'gastos', 'faturamento', 'lucro', 'roas', 'margem', 'roi']
@@ -249,4 +281,80 @@ export function detectIsDailyAggregate(headers: string[]): boolean {
     normalizedHeaders.some(h => h === marker || h.includes(marker))
   )
   return hits.length >= 2
+}
+
+// Returns true when the first column is a UTM dimension AND file has aggregate metrics.
+// Must check FIRST column specifically to distinguish from orders files (which also have utm_ columns).
+export function detectIsUtmBreakdown(headers: string[]): boolean {
+  if (headers.length === 0) return false
+
+  const firstNorm = normalize(headers[0])
+  // Normalize handles underscores: 'UTM_CONTENT' → 'utm_content'
+  const UTM_DIM_PATTERNS = [
+    'utm_campaign', 'utm campaign',
+    'utm_medium', 'utm medium',
+    'utm_content', 'utm content',
+    'utm_term', 'utm term',
+    'utm_source', 'utm source',
+  ]
+  const firstIsUtmDim = UTM_DIM_PATTERNS.includes(firstNorm)
+  if (!firstIsUtmDim) return false
+
+  const normed = headers.map(h => normalize(h))
+  return normed.some(h =>
+    h === 'gastos' || h === 'faturamento' || h === 'vendas' || h === 'roas' || h === 'lucro'
+  )
+}
+
+// ── Meta Ads file type detection ─────────────────────────────────────────────
+
+// Columns only present in Meta Ads *structure* (not performance) exports
+const META_STRUCTURE_ONLY_MARKERS = [
+  'campaign status', 'status da campanha',
+  'ad set run status', 'status de exibicao',
+  'campaign objective', 'objetivo da campanha',
+  'buying type', 'tipo de compra',
+  'campaign daily budget', 'orcamento diario',
+  'ad set daily budget',
+  'story id',
+  'creative type', 'tipo de criativo',
+  'permalink',
+  'video id',
+  'video file name',
+  'url tags', 'parametros de url', 'url parameters',
+  'call to action', 'chamada para acao',
+]
+
+// Columns only present in Meta Ads *performance* exports
+const META_PERFORMANCE_MARKERS = [
+  'valor usado', 'amount spent', 'valor gasto',
+  'impressoes', 'impressions',
+]
+
+/**
+ * Returns true when headers belong to a Meta Ads structure export
+ * (Campaign/AdSet/Ad hierarchy without performance metrics like spend/impressions).
+ */
+export function detectIsMetaStructure(headers: string[]): boolean {
+  const normed = headers.map(h => normalize(h))
+
+  // Presence of performance markers means it's a performance export, not structure
+  const hasPerformance = META_PERFORMANCE_MARKERS.some(m =>
+    normed.some(h => h === m || h.startsWith(m))
+  )
+  if (hasPerformance) return false
+
+  // Presence of structure-only markers → definitely a structure export
+  const hasStructureOnly = META_STRUCTURE_ONLY_MARKERS.some(m =>
+    normed.some(h => h === m || h.includes(m))
+  )
+  if (hasStructureOnly) return true
+
+  // Fallback: hierarchical columns present but NO performance columns
+  const hasCampaignName = normed.some(h => h.includes('campaign name') || h.includes('nome da campanha'))
+  const hasAdSetName   = normed.some(h => h === 'ad set name' || h.includes('ad set name') || h.includes('conjunto de an'))
+  const hasAdName      = normed.some(h => h === 'ad name' || h.includes('anuncio'))
+  const hasCampaignId  = normed.some(h => h === 'campaign id' || h.includes('campaign id') || h.includes('id da campanha'))
+
+  return hasCampaignName && hasAdSetName && hasAdName && hasCampaignId
 }

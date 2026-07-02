@@ -4,62 +4,39 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { PageShell } from '@/components/layout/PageShell'
 import { CsvDropzone } from '@/components/upload/CsvDropzone'
-import { UploadStatusBadge } from '@/components/upload/UploadStatusBadge'
 import { useUpload } from '@/hooks/useUpload'
-import { COLUMN_LABELS, DAILY_COLUMN_LABELS } from '@/lib/parsers/normalizer'
+import { generateUtmifyPreview, FilePreviewData } from '@/lib/parsers/file-preview'
+import { DAILY_COLUMN_LABELS } from '@/lib/parsers/normalizer'
 import {
-  generateMetaPreview,
-  generateUtmifyPreview,
-  FilePreviewData,
-} from '@/lib/parsers/file-preview'
-import {
-  AlertCircle,
-  ArrowRight,
-  Info,
-  AlertTriangle,
-  CheckCircle2,
-  BarChart2,
-  Loader2,
-  Eye,
-  Tag,
-  Rows3,
+  AlertCircle, ArrowRight, Info, AlertTriangle, CheckCircle2,
+  Loader2, Eye, Tag, Rows3, BarChart2, X,
 } from 'lucide-react'
-
-const REQUIRED_FOR_DIAGNOSIS = new Set(['order_date', 'gross_revenue', 'status', 'utm_campaign'])
+import { cn } from '@/lib/utils'
 
 const TYPE_LABELS: Record<string, string> = {
-  meta_ads: 'Meta Ads CSV',
-  utmify_orders: 'UTMify — Pedidos/Vendas',
-  utmify_daily: 'UTMify — Relatório Agregado Diário',
-  unknown: 'Tipo desconhecido',
+  utmify_orders:       'UTMify — Pedidos/Vendas',
+  utmify_daily:        'UTMify — Relatório Agregado Diário',
+  utmify_utm_breakdown:'UTMify — Quebra por UTM',
+  unknown:             'Tipo desconhecido',
 }
 
-function PreviewPanel({
-  preview,
-  accentClass,
-}: {
-  preview: FilePreviewData
-  accentClass: string
-}) {
-  const hasCriticalMissing = preview.missingColumns.some(c => c.required)
-
+function PreviewPanel({ preview }: { preview: FilePreviewData }) {
   return (
     <div className="border border-pb-border rounded-xl overflow-hidden text-sm">
-      {/* Header */}
       <div className="bg-pb-card-alt px-4 py-3 flex items-center gap-2 border-b border-pb-border">
-        <Eye className={`h-4 w-4 ${accentClass}`} />
+        <Eye className="h-4 w-4 text-pb-purple" />
         <span className="font-semibold text-pb-text">Preview</span>
-        <span className="text-pb-muted truncate">{preview.fileName}</span>
+        <span className="text-pb-muted text-xs truncate">{preview.fileName}</span>
       </div>
 
       {preview.error ? (
         <div className="p-4 flex items-start gap-2 text-pb-red">
           <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-          <p>{preview.error}</p>
+          <p className="text-sm">{preview.error}</p>
         </div>
       ) : (
         <div className="divide-y divide-pb-border">
-          {/* Summary */}
+          {/* Type + row count */}
           <div className="px-4 py-3 flex flex-wrap gap-x-6 gap-y-1">
             <div className="flex items-center gap-1.5">
               <Tag className="h-3.5 w-3.5 text-pb-muted" />
@@ -78,6 +55,15 @@ function PreviewPanel({
               </span>
             </div>
           </div>
+
+          {/* UTM Breakdown info */}
+          {preview.detectedType === 'utmify_utm_breakdown' && (
+            <div className="px-4 py-3">
+              <p className="text-xs text-pb-muted">
+                Arquivo de <span className="text-pb-text font-medium">Quebra por UTM</span> — data não é obrigatória neste tipo de relatório.
+              </p>
+            </div>
+          )}
 
           {/* Recognized columns */}
           {preview.recognizedColumns.length > 0 && (
@@ -108,37 +94,27 @@ function PreviewPanel({
                         : 'bg-pb-yellow/10 text-pb-yellow border-pb-yellow/20'
                     }`}
                   >
-                    {c.required
-                      ? <AlertCircle className="h-3 w-3" />
-                      : <AlertTriangle className="h-3 w-3" />
-                    }
+                    {c.required ? <AlertCircle className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
                     {c.label}
                     {c.required && <span className="opacity-70">(obrigatória)</span>}
                   </span>
                 ))}
               </div>
-              {hasCriticalMissing && (
-                <p className="text-xs text-pb-muted">
-                  Colunas obrigatórias ausentes afetam o diagnóstico, mas você pode continuar.
-                </p>
-              )}
             </div>
           )}
 
-          {/* First 5 rows */}
+          {/* Preview rows */}
           {preview.previewRows.length > 0 && (
             <div className="px-4 py-3 space-y-2">
               <p className="text-xs font-semibold text-pb-muted uppercase tracking-wide">
-                Primeiras {preview.previewRows.length} linhas normalizadas
+                Primeiras {preview.previewRows.length} linhas
               </p>
               <div className="overflow-x-auto rounded border border-pb-border">
                 <table className="text-xs w-full min-w-max">
                   <thead>
                     <tr className="bg-pb-card-alt border-b border-pb-border">
                       {Object.keys(preview.previewRows[0]).map(col => (
-                        <th key={col} className="px-3 py-2 text-left font-medium text-pb-muted whitespace-nowrap">
-                          {col}
-                        </th>
+                        <th key={col} className="px-3 py-2 text-left font-medium text-pb-muted whitespace-nowrap">{col}</th>
                       ))}
                     </tr>
                   </thead>
@@ -146,9 +122,7 @@ function PreviewPanel({
                     {preview.previewRows.map((row, i) => (
                       <tr key={i} className="border-b border-pb-border last:border-0 hover:bg-pb-card-alt/50">
                         {Object.values(row).map((val, j) => (
-                          <td key={j} className="px-3 py-2 text-pb-text whitespace-nowrap max-w-[200px] truncate">
-                            {val}
-                          </td>
+                          <td key={j} className="px-3 py-2 text-pb-text whitespace-nowrap max-w-[200px] truncate">{val}</td>
                         ))}
                       </tr>
                     ))}
@@ -164,238 +138,151 @@ function PreviewPanel({
 }
 
 export default function UploadPage() {
-  const [metaFile, setMetaFile] = useState<File | null>(null)
   const [utmifyFile, setUtmifyFile] = useState<File | null>(null)
-  const [metaPreview, setMetaPreview] = useState<FilePreviewData | null>(null)
-  const [utmifyPreview, setUtmifyPreview] = useState<FilePreviewData | null>(null)
-  const [metaPreviewLoading, setMetaPreviewLoading] = useState(false)
-  const [utmifyPreviewLoading, setUtmifyPreviewLoading] = useState(false)
+  const [preview, setPreview] = useState<FilePreviewData | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
-  const { upload, status, result, error } = useUpload()
+  const { upload, forceUpload, status, result, error, reset: resetUpload, duplicateSession } = useUpload()
   const router = useRouter()
 
+  // Generate preview when file changes
   useEffect(() => {
-    if (!metaFile) { setMetaPreview(null); return }
-    setMetaPreviewLoading(true)
-    generateMetaPreview(metaFile)
-      .then(setMetaPreview)
-      .finally(() => setMetaPreviewLoading(false))
-  }, [metaFile])
-
-  useEffect(() => {
-    if (!utmifyFile) { setUtmifyPreview(null); return }
-    setUtmifyPreviewLoading(true)
+    if (!utmifyFile) { setPreview(null); return }
+    setPreviewLoading(true)
     generateUtmifyPreview(utmifyFile)
-      .then(setUtmifyPreview)
-      .finally(() => setUtmifyPreviewLoading(false))
+      .then(setPreview)
+      .finally(() => setPreviewLoading(false))
   }, [utmifyFile])
+
+  // Redirect to /imports after successful upload
+  useEffect(() => {
+    if (status === 'success') {
+      const timer = setTimeout(() => router.push('/imports'), 1200)
+      return () => clearTimeout(timer)
+    }
+  }, [status, router])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!metaFile && !utmifyFile) return
-    await upload(metaFile, utmifyFile)
+    await upload(utmifyFile)
   }
 
-  const missingCols = result?.utmifyMissingColumns ?? []
-  const criticalMissing = missingCols.filter(c => REQUIRED_FOR_DIAGNOSIS.has(c))
-  const optionalMissing = missingCols.filter(c => !REQUIRED_FOR_DIAGNOSIS.has(c))
-  const allLabels = { ...COLUMN_LABELS, ...DAILY_COLUMN_LABELS }
-
   return (
-    <PageShell className="max-w-3xl space-y-6">
+    <PageShell className="max-w-2xl space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-pb-text">Upload de Dados</h1>
+        <h1 className="text-2xl font-bold text-pb-text">Upload UTMify</h1>
         <p className="text-pb-muted text-sm mt-1">
-          Importe o CSV do Meta Ads e/ou o relatório da UTMify. Pelo menos um arquivo é obrigatório.
+          Importe seu relatório da UTMify para análise. Cada upload vira um import salvo.
         </p>
       </div>
 
-      {/* Instruções */}
-      <div className="bg-pb-blue/10 border border-pb-blue/30 rounded-xl p-4 flex gap-3">
+      {/* Info box — Meta Ads future */}
+      <div className="bg-pb-blue/[0.07] border border-pb-blue/20 rounded-xl p-4 flex gap-3">
         <Info className="h-4 w-4 text-pb-blue shrink-0 mt-0.5" />
-        <div className="text-sm space-y-1">
-          <p className="text-pb-text">
-            <strong>Meta Ads:</strong> Gerenciador de Anúncios → Relatórios → Exportar CSV
-          </p>
-          <p className="text-pb-text">
-            <strong>UTMify:</strong> Dashboard → Pedidos/Relatórios → Exportar CSV ou XLSX
-          </p>
-        </div>
+        <p className="text-xs text-pb-muted leading-relaxed">
+          <span className="text-pb-text font-medium">Meta Ads Structure</span> ficará disponível futuramente em <span className="text-pb-text font-medium">Pit Planilhas</span>.
+          No momento, o Pitbrain está focado em relatórios UTMify (CSV, XLSX ou XLS).
+        </p>
       </div>
 
-      {/* Dropzones + Previews */}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-pb-blue" />
-              <p className="text-xs font-semibold text-pb-muted uppercase tracking-wide">Meta Ads</p>
-            </div>
-            <CsvDropzone
-              label="CSV do Meta Ads"
-              description="Exportação do Gerenciador de Anúncios (nível campanha, conjunto ou anúncio)"
-              accept=".csv,text/csv"
-              onFileSelected={setMetaFile}
-              selectedFile={metaFile}
-            />
+      <form onSubmit={handleSubmit} className="space-y-5">
+        {/* Dropzone */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-pb-purple" />
+            <p className="text-xs font-semibold text-pb-muted uppercase tracking-wide">UTMify</p>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-pb-purple" />
-              <p className="text-xs font-semibold text-pb-muted uppercase tracking-wide">UTMify</p>
-            </div>
-            <CsvDropzone
-              label="CSV/XLSX da UTMify"
-              description="Relatório de pedidos ou relatório agregado diário"
-              accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
-              acceptHint="Arraste um .csv, .xlsx ou .xls ou clique para selecionar"
-              onFileSelected={setUtmifyFile}
-              selectedFile={utmifyFile}
-            />
-          </div>
+          <CsvDropzone
+            label="Arquivo UTMify"
+            description="Relatório de pedidos, relatório agregado diário ou quebra por UTM"
+            accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+            acceptHint="Arraste um .csv, .xlsx ou .xls ou clique para selecionar"
+            onFileSelected={setUtmifyFile}
+            selectedFile={utmifyFile}
+          />
         </div>
 
-        {/* Preview loading indicator */}
-        {(metaPreviewLoading || utmifyPreviewLoading) && (
+        {/* Preview loading */}
+        {previewLoading && (
           <div className="flex items-center gap-2 text-pb-muted text-sm">
             <Loader2 className="h-4 w-4 animate-spin" />
             Analisando arquivo…
           </div>
         )}
 
-        {/* Meta preview */}
-        {metaPreview && !metaPreviewLoading && (
-          <PreviewPanel preview={metaPreview} accentClass="text-pb-blue" />
-        )}
+        {preview && !previewLoading && <PreviewPanel preview={preview} />}
 
-        {/* UTMify preview */}
-        {utmifyPreview && !utmifyPreviewLoading && (
-          <PreviewPanel preview={utmifyPreview} accentClass="text-pb-purple" />
-        )}
-
-        <div className="flex items-center justify-between pt-2">
-          <UploadStatusBadge status={status} />
-          <button
-            type="submit"
-            disabled={(!metaFile && !utmifyFile) || status === 'uploading'}
-            className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-2.5 rounded-xl transition-all text-sm"
+        {/* Duplicate warning */}
+        {status === 'duplicate' && duplicateSession && (
+          <div
+            className="rounded-xl p-4 space-y-3"
+            style={{ background: 'rgba(250,204,21,0.06)', border: '1px solid rgba(250,204,21,0.25)' }}
           >
-            {status === 'uploading' ? 'Processando...' : 'Importar dados'}
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        </div>
-      </form>
-
-      {/* Error */}
-      {error && (
-        <div className="bg-pb-red/10 border border-pb-red/30 rounded-xl p-4 flex items-center gap-3">
-          <AlertCircle className="h-4 w-4 text-pb-red shrink-0" />
-          <p className="text-pb-red text-sm">{error}</p>
-        </div>
-      )}
-
-      {/* Success */}
-      {result && status === 'success' && (
-        <div className="space-y-3">
-          <div className="bg-pb-green/10 border border-pb-green/30 rounded-xl p-5 space-y-3">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-pb-green" />
-              <p className="font-semibold text-pb-green text-sm">Importação concluída!</p>
-            </div>
-            <ul className="text-sm text-pb-muted space-y-1">
-              {result.metaCount > 0 && (
-                <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-pb-blue" />
-                  {result.metaCount} linhas do Meta Ads importadas
-                </li>
-              )}
-              {result.utmifyCount > 0 && (
-                <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-pb-purple" />
-                  {result.utmifyCount}{' '}
-                  {result.utmifySourceType === 'utmify_daily_aggregate' ? 'dias' : 'pedidos'} da UTMify importados
-                  {result.utmifySourceType && (
-                    <span className="text-xs text-pb-muted/70">
-                      ({result.utmifySourceType === 'utmify_daily_aggregate' ? 'relatório agregado' : 'pedidos individuais'})
-                    </span>
-                  )}
-                </li>
-              )}
-            </ul>
-            {result.warnings.length > 0 && (
-              <div className="text-xs text-pb-yellow space-y-0.5">
-                {result.warnings.map((w, i) => <p key={i}>⚠ {w}</p>)}
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-4 w-4 text-pb-yellow shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-pb-yellow">Este arquivo parece já ter sido importado.</p>
+                <p className="text-xs text-pb-muted mt-1">
+                  Importação anterior: <strong className="text-pb-text">{duplicateSession.fileName}</strong>
+                  {' '}· {duplicateSession.rowCount} linhas
+                </p>
               </div>
-            )}
-            {missingCols.length === 0 && (
+            </div>
+            <div className="flex items-center gap-2 pl-7">
               <button
-                onClick={() => router.push('/dashboard')}
-                className="inline-flex items-center gap-2 bg-pb-green/20 hover:bg-pb-green/30 text-pb-green font-medium px-4 py-2 rounded-lg text-sm transition-colors border border-pb-green/30"
+                type="button"
+                onClick={() => forceUpload(utmifyFile)}
+                className="inline-flex items-center gap-2 bg-pb-yellow/15 hover:bg-pb-yellow/25 text-pb-yellow font-medium px-4 py-2 rounded-lg text-xs transition-colors border border-pb-yellow/30"
               >
-                <BarChart2 className="h-4 w-4" />
-                Ver dashboard
+                Importar mesmo assim
               </button>
-            )}
+              <button
+                type="button"
+                onClick={resetUpload}
+                className="inline-flex items-center gap-2 border border-pb-border text-pb-muted hover:text-pb-text font-medium px-4 py-2 rounded-lg text-xs transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
+        )}
 
-          {criticalMissing.length > 0 && (
-            <div className="bg-pb-red/10 border border-pb-red/30 rounded-xl p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 text-pb-red shrink-0" />
-                <p className="font-semibold text-pb-red text-sm">Colunas obrigatórias não encontradas</p>
-              </div>
-              <p className="text-xs text-pb-muted">
-                Sem essas colunas, o diagnóstico não consegue calcular receita e conversões corretamente.
-              </p>
-              <ul className="space-y-1.5">
-                {criticalMissing.map(col => (
-                  <li key={col} className="flex items-center gap-2 text-xs">
-                    <span className="w-1.5 h-1.5 rounded-full bg-pb-red shrink-0" />
-                    <strong className="text-pb-text">{allLabels[col] ?? col}</strong>
-                    <code className="text-pb-muted">({col})</code>
-                  </li>
-                ))}
-              </ul>
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="inline-flex items-center gap-2 border border-pb-border text-pb-muted hover:text-pb-text font-medium px-4 py-2 rounded-lg text-sm transition-colors"
-              >
-                Continuar mesmo assim
-                <ArrowRight className="h-4 w-4" />
-              </button>
+        {/* Error */}
+        {error && (
+          <div className="bg-pb-red/10 border border-pb-red/30 rounded-xl p-4 flex items-center gap-3">
+            <AlertCircle className="h-4 w-4 text-pb-red shrink-0" />
+            <p className="text-pb-red text-sm">{error}</p>
+          </div>
+        )}
+
+        {/* Success */}
+        {status === 'success' && result && (
+          <div className="bg-pb-green/10 border border-pb-green/30 rounded-xl p-4 flex items-center gap-3">
+            <CheckCircle2 className="h-5 w-5 text-pb-green shrink-0" />
+            <div>
+              <p className="font-semibold text-pb-green text-sm">Import salvo!</p>
+              <p className="text-xs text-pb-muted mt-0.5">Redirecionando para Imports Salvos…</p>
             </div>
-          )}
+          </div>
+        )}
 
-          {optionalMissing.length > 0 && (
-            <div className="bg-pb-yellow/10 border border-pb-yellow/30 rounded-xl p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-pb-yellow shrink-0" />
-                <p className="font-semibold text-pb-yellow text-sm">Colunas opcionais não encontradas</p>
-              </div>
-              <ul className="space-y-1.5">
-                {optionalMissing.map(col => (
-                  <li key={col} className="flex items-center gap-2 text-xs">
-                    <span className="w-1.5 h-1.5 rounded-full bg-pb-yellow shrink-0" />
-                    <strong className="text-pb-text">{allLabels[col] ?? col}</strong>
-                    <code className="text-pb-muted">({col})</code>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {missingCols.length > 0 && criticalMissing.length === 0 && (
+        {/* Submit */}
+        {status !== 'duplicate' && status !== 'success' && (
+          <div className="flex items-center justify-end pt-1">
             <button
-              onClick={() => router.push('/dashboard')}
-              className="inline-flex items-center gap-2 bg-pb-green/20 hover:bg-pb-green/30 text-pb-green font-medium px-4 py-2 rounded-lg text-sm transition-colors border border-pb-green/30"
+              type="submit"
+              disabled={!utmifyFile || status === 'uploading'}
+              className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-2.5 rounded-xl transition-all text-sm"
             >
-              Continuar para o dashboard
-              <ArrowRight className="h-4 w-4" />
+              {status === 'uploading'
+                ? <><Loader2 className="h-4 w-4 animate-spin" />Processando…</>
+                : <><BarChart2 className="h-4 w-4" />Salvar import<ArrowRight className="h-4 w-4" /></>
+              }
             </button>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+      </form>
     </PageShell>
   )
 }

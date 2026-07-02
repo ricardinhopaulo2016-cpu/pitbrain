@@ -2,22 +2,41 @@ import Papa from 'papaparse'
 import { MetaCampaign, MetaRawRow } from '@/types/meta'
 import { MetaRowSchema } from '@/lib/validators/meta-schema'
 import { parseMonetaryValue, parseNumericValue } from '@/lib/utils'
+import { detectIsMetaStructure, cleanHeader } from '@/lib/parsers/normalizer'
+
+export interface MetaParseResult {
+  rows: MetaCampaign[]
+  sourceType: 'meta_ads_performance' | 'meta_ads_structure'
+}
 
 // Common column name aliases across Meta export versions
 const COLUMN_MAP: Record<string, keyof MetaRawRow> = {
+  // Campaign
   'nome da campanha': 'campaign_name',
   'campaign name': 'campaign_name',
+  'nome da camp': 'campaign_name',
   'id da campanha': 'campaign_id',
   'campaign id': 'campaign_id',
+  // Ad Set
   'conjunto de anúncios': 'adset_name',
+  'conjunto de anuncios': 'adset_name',
   'ad set name': 'adset_name',
+  'nome do conjunto de anuncios': 'adset_name',
+  'id do conjunto de anuncios': 'adset_id',
+  'ad set id': 'adset_id',
+  // Ad
   'anúncio': 'ad_name',
+  'anuncio': 'ad_name',
   'ad name': 'ad_name',
+  'id do anuncio': 'ad_id',
+  'ad id': 'ad_id',
+  // Performance
   'valor usado (brl)': 'spend',
   'amount spent (brl)': 'spend',
   'valor gasto': 'spend',
   'spend': 'spend',
   'impressões': 'impressions',
+  'impressoes': 'impressions',
   'impressions': 'impressions',
   'cliques (todos)': 'clicks',
   'clicks (all)': 'clicks',
@@ -36,18 +55,36 @@ const COLUMN_MAP: Record<string, keyof MetaRawRow> = {
   'ctr (link click-through rate)': 'ctr',
   'ctr (all)': 'ctr',
   'ctr': 'ctr',
+  // Dates
   'início dos relatórios': 'date_start',
+  'inicio dos relatorios': 'date_start',
   'reporting starts': 'date_start',
   'término dos relatórios': 'date_stop',
+  'termino dos relatorios': 'date_stop',
   'reporting ends': 'date_stop',
+  // Actions
   'compras no site': 'purchase_roas',
   'website purchases': 'purchase_roas',
   'purchases': 'purchase_roas',
   'iniciações de checkout no site': 'actions',
+  'iniciacoes de checkout no site': 'actions',
 }
 
+/**
+ * Normalize a CSV header key:
+ * - strip BOM (the most common cause of "Campaign Name" → "Sem nome")
+ * - lowercase + trim + collapse whitespace
+ * - remove accent combining marks
+ */
 function normalizeKey(key: string): string {
-  return key.toLowerCase().trim()
+  return key
+    .replace(/^﻿/, '') // strip BOM
+    .replace(/\t/g, ' ')
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // strip diacritics
+    .replace(/\s+/g, ' ')
 }
 
 function remapRow(raw: Record<string, string>): MetaRawRow {
@@ -65,7 +102,6 @@ function remapRow(raw: Record<string, string>): MetaRawRow {
 }
 
 function extractActionValue(row: MetaRawRow, actionType: string): number {
-  // Meta exports action columns like "purchases" or "website_purchases"
   const keys = Object.keys(row).map(k => k.toLowerCase())
   for (const key of keys) {
     if (key.includes(actionType)) {
@@ -79,8 +115,15 @@ export function parseMetaCsv(csvText: string): MetaCampaign[] {
   const result = Papa.parse<Record<string, string>>(csvText, {
     header: true,
     skipEmptyLines: true,
-    transformHeader: (h) => h.trim(),
+    // cleanHeader strips BOM and trims; without this the first column name
+    // has an invisible ﻿ prefix that breaks all COLUMN_MAP lookups.
+    transformHeader: cleanHeader,
   })
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[pitbrain:meta-parser] headers', result.meta?.fields)
+    console.log('[pitbrain:meta-parser] rowCount', result.data.length)
+  }
 
   return result.data
     .map((rawRow): MetaCampaign | null => {
@@ -96,7 +139,7 @@ export function parseMetaCsv(csvText: string): MetaCampaign[] {
 
       return {
         campaignId: r.campaign_id || '',
-        campaignName: r.campaign_name || 'Sem nome',
+        campaignName: r.campaign_name || '',
         adsetName: r.adset_name || '',
         adsetId: r.adset_id || '',
         adName: r.ad_name || '',
@@ -118,4 +161,35 @@ export function parseMetaCsv(csvText: string): MetaCampaign[] {
       }
     })
     .filter((row): row is MetaCampaign => row !== null)
+}
+
+/**
+ * Parse a Meta Ads CSV and detect whether it is a structure or performance export.
+ * Use this in the upload API instead of `parseMetaCsv` so the route can return
+ * `metaSourceType` and redirect accordingly.
+ */
+export function parseMetaFileText(csvText: string): MetaParseResult {
+  // Parse one row to get headers for type detection
+  const headerScan = Papa.parse<Record<string, string>>(csvText, {
+    header: true,
+    preview: 1,
+    skipEmptyLines: true,
+    transformHeader: cleanHeader,
+  })
+  const headers = headerScan.meta?.fields ?? Object.keys(headerScan.data[0] ?? {})
+  const isStructure = detectIsMetaStructure(headers)
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[pitbrain:meta-parser] file type detection', {
+      headers,
+      isStructure,
+      sourceType: isStructure ? 'meta_ads_structure' : 'meta_ads_performance',
+    })
+  }
+
+  const rows = parseMetaCsv(csvText)
+  return {
+    rows,
+    sourceType: isStructure ? 'meta_ads_structure' : 'meta_ads_performance',
+  }
 }

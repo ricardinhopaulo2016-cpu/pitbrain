@@ -3,9 +3,9 @@
 import { useRouter } from 'next/navigation'
 import { PageShell } from '@/components/layout/PageShell'
 import { useMetrics } from '@/hooks/useMetrics'
-import { useSessionStore } from '@/store/sessionStore'
+import { useActiveImport } from '@/hooks/useActiveImport'
 import { formatNumber, formatPercent, formatCurrency } from '@/lib/utils'
-import { Upload, ArrowDown } from 'lucide-react'
+import { Upload, ArrowDown, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface FunnelStepData {
@@ -73,22 +73,22 @@ function FunnelStep({ step, isLast }: { step: FunnelStepData; isLast: boolean })
 }
 
 export default function FunilPage() {
-  const { sessionId } = useSessionStore()
+  const activeImport = useActiveImport()
   const { metrics, loading } = useMetrics()
   const router = useRouter()
 
-  if (!sessionId) {
+  if (!activeImport) {
     return (
       <PageShell className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <div className="w-16 h-16 rounded-2xl bg-pb-card-alt border border-pb-border flex items-center justify-center">
           <Upload className="h-7 w-7 text-pb-muted" />
         </div>
         <div className="text-center">
-          <p className="text-pb-text font-medium mb-1">Nenhuma sessão ativa</p>
-          <p className="text-pb-muted text-sm">Faça o upload dos dados para começar.</p>
+          <p className="text-pb-text font-medium mb-1">Nenhum import ativo</p>
+          <p className="text-pb-muted text-sm">Selecione um import na página Imports Salvos.</p>
         </div>
-        <button onClick={() => router.push('/upload')} className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all">
-          Ir para upload
+        <button onClick={() => router.push('/imports')} className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all">
+          Imports Salvos
         </button>
       </PageShell>
     )
@@ -160,12 +160,26 @@ export default function FunilPage() {
     },
   ]
 
+  const missingIC       = m.initiateCheckouts === 0 && activeImport?.summary?.ic === 0
+  const missingPageViews = m.pageViews === 0 && activeImport?.summary?.pageViews === 0
+
   return (
     <PageShell className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-pb-text">Funil de Conversão</h1>
         <p className="text-pb-muted text-sm mt-0.5">Visão vertical do funil com taxas por etapa</p>
       </div>
+
+      {(missingIC || missingPageViews) && (
+        <div className="flex items-start gap-3 bg-pb-yellow/[0.06] border border-pb-yellow/20 rounded-xl p-4">
+          <Info className="h-4 w-4 text-pb-yellow shrink-0 mt-0.5" />
+          <div className="text-xs text-pb-muted leading-relaxed space-y-0.5">
+            {missingIC        && <p><span className="text-pb-text font-medium">IC (Initiate Checkout)</span> — dado ausente neste import.</p>}
+            {missingPageViews && <p><span className="text-pb-text font-medium">Page Views</span> — dado ausente neste import.</p>}
+            <p>As etapas afetadas mostrarão valor zero. Isso não é um erro.</p>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col items-center py-4">
         {steps.map((step, i) => (

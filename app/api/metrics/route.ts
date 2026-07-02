@@ -11,22 +11,39 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'sessionId obrigatório.' }, { status: 400 })
   }
 
-  const supabase = createServerClient()
+  try {
+    const supabase = createServerClient()
 
-  const [{ data: metaData }, { data: utmifyData }] = await Promise.all([
-    supabase.from('meta_rows').select('payload').eq('session_id', sessionId),
-    supabase.from('utmify_rows').select('payload').eq('session_id', sessionId),
-  ])
+    const [{ data: metaData, error: metaErr }, { data: utmifyData, error: utmErr }] = await Promise.all([
+      supabase.from('meta_rows').select('payload').eq('session_id', sessionId),
+      supabase.from('utmify_rows').select('payload').eq('session_id', sessionId),
+    ])
 
-  const metaRows: MetaCampaign[] = (metaData ?? []).map(r => r.payload as MetaCampaign)
-  const utmifyRows: UtmifySession[] = (utmifyData ?? []).map(r => r.payload as UtmifySession)
+    if (metaErr || utmErr) {
+      const detail = metaErr?.message ?? utmErr?.message
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[pitbrain:metrics] db fetch error:', detail)
+      }
+      return NextResponse.json({ error: 'Erro ao buscar dados da sessão.', detail }, { status: 500 })
+    }
 
-  const metrics = calculateMetrics(metaRows, utmifyRows, sessionId)
+    const metaRows: MetaCampaign[] = (metaData ?? []).map(r => r.payload as MetaCampaign)
+    // utmifyRows may actually hold UtmifyDailyRow[] — calculateMetrics handles both safely
+    const utmifyRows: UtmifySession[] = (utmifyData ?? []).map(r => r.payload as UtmifySession)
 
-  // Upsert snapshot
-  await supabase
-    .from('metrics_snapshots')
-    .upsert({ session_id: sessionId, payload: metrics }, { onConflict: 'session_id' })
+    const metrics = calculateMetrics(metaRows, utmifyRows, sessionId)
 
-  return NextResponse.json(metrics)
+    // Upsert snapshot
+    await supabase
+      .from('metrics_snapshots')
+      .upsert({ session_id: sessionId, payload: metrics }, { onConflict: 'session_id' })
+
+    return NextResponse.json(metrics)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (process.env.NODE_ENV === 'development') {
+      console.error('[pitbrain:metrics] unhandled error:', msg)
+    }
+    return NextResponse.json({ error: 'Erro interno ao calcular métricas.', detail: msg }, { status: 500 })
+  }
 }

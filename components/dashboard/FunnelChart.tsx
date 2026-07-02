@@ -15,7 +15,7 @@ export function FunnelChart({ metrics }: FunnelChartProps) {
     { stage: 'Impressões', value: metrics.impressions, color: '#38BDF8' },
     { stage: 'Cliques',    value: metrics.clicks,      color: '#7C3AED' },
     { stage: 'Page Views', value: metrics.pageViews,   color: '#38BDF8' },
-    { stage: 'Checkouts',  value: metrics.initiateCheckouts, color: '#FACC15' },
+    { stage: 'IC / Add To Cart', value: metrics.initiateCheckouts, color: '#FACC15' },
     { stage: 'Compras',    value: metrics.purchases,   color: '#22C55E' },
   ]
 

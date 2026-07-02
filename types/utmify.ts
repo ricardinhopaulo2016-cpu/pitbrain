@@ -57,11 +57,40 @@ export interface UtmifyDailyRow {
   roi: number | null
   margin: number | null
   initiateCheckout: number | null
+  addToCart: number | null
   cpi: number | null
   clicks: number | null
   impressions: number | null
   pageViews: number | null
   sourceType: 'utmify_daily_aggregate'
+}
+
+export type BreakdownLevel = 'campaign' | 'adset' | 'ad' | 'placement'
+
+export interface UtmifyBreakdownRow {
+  dimensionField: string
+  dimensionName: string
+  rawDimension: string
+  breakdownLevel: BreakdownLevel
+  spend: number
+  revenue: number
+  profit: number | null
+  roas: number | null
+  purchases: number
+  margin: number | null
+  roi: number | null
+  addToCart: number | null
+  ic: number | null
+  cpa: number | null
+  cpi: number | null
+  cpc: number | null
+  ctr: number | null
+  cpm: number | null
+  hook: number | null
+  clicks: number | null
+  impressions: number | null
+  pageViews: number | null
+  sourceType: 'utmify_utm_breakdown'
 }
 
 export type UtmifyParseResult =
@@ -76,4 +105,14 @@ export type UtmifyParseResult =
       rows: UtmifyDailyRow[]
       missingColumns: string[]
       unmappedHeaders: string[]
+    }
+  | {
+      sourceType: 'utmify_utm_breakdown'
+      rows: UtmifyBreakdownRow[]
+      breakdownLevel: BreakdownLevel
+      dimensionField: string
+      dimensionLabel: string
+      missingColumns: string[]
+      unmappedHeaders: string[]
+      ignoredFooterRowsCount: number
     }

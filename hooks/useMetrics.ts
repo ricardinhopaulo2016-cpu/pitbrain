@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { SummaryMetrics } from '@/types/metrics'
 import { useSessionStore } from '@/store/sessionStore'
-import { loadLastImport, buildSummaryMetrics } from '@/lib/calculators/local-metrics'
+import { loadCurrentDataset, buildSummaryMetrics } from '@/lib/calculators/local-metrics'
 
 export function useMetrics(sessionId?: string) {
   const { metrics, setMetrics, sessionId: storedSessionId } = useSessionStore()
@@ -18,7 +18,13 @@ export function useMetrics(sessionId?: string) {
     if (metrics && metrics.sessionId === targetId) return
 
     // Try localStorage first (primary source for MVP)
-    const lastImport = loadLastImport()
+    const lastImport = loadCurrentDataset()
+
+    // Structure files have no performance metrics — don't call the API
+    if (lastImport?.sourceType === 'meta_ads_structure') {
+      return
+    }
+
     if (lastImport && Array.isArray(lastImport.rows) && lastImport.rows.length > 0) {
       console.log('[pitbrain:useMetrics] Using localStorage data', {
         sourceType: lastImport.sourceType,

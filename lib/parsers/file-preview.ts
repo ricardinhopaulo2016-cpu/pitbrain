@@ -4,14 +4,18 @@ import Papa from 'papaparse'
 import {
   detectColumnMapping,
   detectDailyAggregateMapping,
+  detectBreakdownMapping,
   detectIsDailyAggregate,
+  detectIsUtmBreakdown,
+  detectIsMetaStructure,
+  cleanHeader,
   COLUMN_LABELS,
   DAILY_COLUMN_LABELS,
   EXPECTED_COLUMNS,
   DAILY_EXPECTED_COLUMNS,
 } from './normalizer'
 
-export type DetectedFileType = 'meta_ads' | 'utmify_orders' | 'utmify_daily' | 'unknown'
+export type DetectedFileType = 'meta_ads' | 'meta_ads_structure' | 'utmify_orders' | 'utmify_daily' | 'utmify_utm_breakdown' | 'unknown'
 
 export interface RecognizedColumn {
   original: string
@@ -75,8 +79,27 @@ const META_COLUMN_ALIASES: Record<string, string[]> = {
 
 const REQUIRED_FOR_DIAGNOSIS = new Set(['order_date', 'gross_revenue', 'status', 'utm_campaign'])
 
+// Page Views: if detected via a non-standard column name (e.g. UTMify's
+// abbreviated "VIS. DE PÁG."), annotate the recognized-column label with the
+// original header so the user can see what was matched.
+const STANDARD_PV_NAMES = new Set(['page views', 'page view', 'pageviews', 'page_views', 'pv'])
+
+function annotatePageViewsOrigin(recognized: RecognizedColumn[]): RecognizedColumn[] {
+  const pvIdx = recognized.findIndex(r => r.canonical === 'page_views')
+  if (pvIdx === -1) return recognized
+
+  const originalNorm = recognized[pvIdx].original.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const standardNorm = [...STANDARD_PV_NAMES].map(n => n.replace(/[^a-z0-9]/g, ''))
+  if (standardNorm.includes(originalNorm)) return recognized
+
+  const next = [...recognized]
+  next[pvIdx] = { ...next[pvIdx], label: `Page Views (via ${next[pvIdx].original})` }
+  return next
+}
+
 function normalizeStr(str: string): string {
   return str
+    .replace(/^﻿/, '') // strip BOM
     .toLowerCase()
     .trim()
     .normalize('NFD')
@@ -127,7 +150,7 @@ export async function generateMetaPreview(file: File): Promise<FilePreviewData> 
     const result = Papa.parse<Record<string, string>>(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (h) => h.trim(),
+      transformHeader: cleanHeader, // strips BOM so first-column header is detected correctly
     })
 
     if (result.data.length === 0) {
@@ -144,6 +167,7 @@ export async function generateMetaPreview(file: File): Promise<FilePreviewData> 
     }
 
     const headers = Object.keys(result.data[0])
+    const isStructure = detectIsMetaStructure(headers)
     const { recognized, missing } = detectMetaColumns(headers)
 
     const previewRows = result.data.slice(0, 5).map(row => {
@@ -156,7 +180,7 @@ export async function generateMetaPreview(file: File): Promise<FilePreviewData> 
 
     return {
       fileName: file.name,
-      detectedType: 'meta_ads',
+      detectedType: isStructure ? 'meta_ads_structure' : 'meta_ads',
       rowCount: result.data.length,
       allColumns: headers,
       recognizedColumns: recognized,
@@ -183,7 +207,7 @@ export async function generateUtmifyPreview(file: File): Promise<FilePreviewData
     const result = Papa.parse<Record<string, string>>(csvText, {
       header: true,
       skipEmptyLines: true,
-      transformHeader: (h) => h.trim(),
+      transformHeader: cleanHeader,
     })
 
     if (result.data.length === 0) {
@@ -200,12 +224,15 @@ export async function generateUtmifyPreview(file: File): Promise<FilePreviewData
     }
 
     const headers = Object.keys(result.data[0])
-    const isDaily = detectIsDailyAggregate(headers)
+    const isBreakdown = detectIsUtmBreakdown(headers)
+    const isDaily = !isBreakdown && detectIsDailyAggregate(headers)
 
-    if (isDaily) {
-      const { mapping, missingColumns: missingKeys, unmappedHeaders: _ } = detectDailyAggregateMapping(headers)
+    if (isBreakdown || isDaily) {
+      const { mapping, missingColumns: missingKeys, unmappedHeaders: _ } = isBreakdown
+        ? detectBreakdownMapping(headers)
+        : detectDailyAggregateMapping(headers)
 
-      const recognized: RecognizedColumn[] = Object.entries(mapping)
+      let recognized: RecognizedColumn[] = Object.entries(mapping)
         .filter(([, v]) => v !== null)
         .map(([canonical, original]) => ({
           original: original as string,
@@ -213,11 +240,26 @@ export async function generateUtmifyPreview(file: File): Promise<FilePreviewData
           label: DAILY_COLUMN_LABELS[canonical] ?? canonical,
         }))
 
-      const missing: MissingColumn[] = missingKeys.map(canonical => ({
-        canonical,
-        label: DAILY_COLUMN_LABELS[canonical] ?? canonical,
-        required: DAILY_EXPECTED_COLUMNS.includes(canonical),
-      }))
+      // IC / Add To Cart equivalence: if add_to_cart is found but ic is not,
+      // label add_to_cart as "IC / Add To Cart" so the user sees IC was covered.
+      const hasIC = recognized.some(r => r.canonical === 'ic')
+      const atcIdx = recognized.findIndex(r => r.canonical === 'add_to_cart')
+      if (atcIdx !== -1 && !hasIC) {
+        recognized[atcIdx] = { ...recognized[atcIdx], label: 'IC / Add To Cart' }
+      }
+
+      recognized = annotatePageViewsOrigin(recognized)
+
+      // Never show IC as missing when add_to_cart is present.
+      // date is never in missingKeys for breakdown (detectBreakdownMapping excludes it).
+      const expectedCols = isBreakdown ? [] : DAILY_EXPECTED_COLUMNS
+      const missing: MissingColumn[] = missingKeys
+        .filter(canonical => !(canonical === 'ic' && atcIdx !== -1))
+        .map(canonical => ({
+          canonical,
+          label: DAILY_COLUMN_LABELS[canonical] ?? canonical,
+          required: expectedCols.includes(canonical),
+        }))
 
       const reverseMap: Record<string, string> = {}
       for (const rec of recognized) {
@@ -234,7 +276,7 @@ export async function generateUtmifyPreview(file: File): Promise<FilePreviewData
 
       return {
         fileName: file.name,
-        detectedType: 'utmify_daily',
+        detectedType: isBreakdown ? 'utmify_utm_breakdown' : 'utmify_daily',
         rowCount: result.data.length,
         allColumns: headers,
         recognizedColumns: recognized,
@@ -246,13 +288,15 @@ export async function generateUtmifyPreview(file: File): Promise<FilePreviewData
     // Orders mode
     const { mapping, missingColumns: missingKeys } = detectColumnMapping(headers)
 
-    const recognized: RecognizedColumn[] = Object.entries(mapping)
-      .filter(([, v]) => v !== null)
-      .map(([canonical, original]) => ({
-        original: original as string,
-        canonical,
-        label: COLUMN_LABELS[canonical] ?? canonical,
-      }))
+    const recognized: RecognizedColumn[] = annotatePageViewsOrigin(
+      Object.entries(mapping)
+        .filter(([, v]) => v !== null)
+        .map(([canonical, original]) => ({
+          original: original as string,
+          canonical,
+          label: COLUMN_LABELS[canonical] ?? canonical,
+        }))
+    )
 
     const missing: MissingColumn[] = missingKeys.map(canonical => ({
       canonical,

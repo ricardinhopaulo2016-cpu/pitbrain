@@ -1,5 +1,6 @@
-import { UtmifyDailyRow, UtmifySession, UtmifyParseResult } from '@/types/utmify'
+import { UtmifyDailyRow, UtmifySession, UtmifyBreakdownRow, UtmifyParseResult, BreakdownLevel } from '@/types/utmify'
 import { FunnelMetrics, SummaryMetrics } from '@/types/metrics'
+import { ImportMode, ImportSession } from '@/types/import'
 
 // ── Defensive helpers ────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export interface ImportSummary {
   profit: number
   purchases: number
   initiateCheckout: number
+  addToCart?: number
   clicks: number
   impressions: number
   pageViews: number
@@ -47,54 +49,237 @@ export interface ImportSummary {
   cpc: number | null
   ctr: number | null
   cpm: number | null
+  ignoredFooterRowsCount?: number
 }
 
 export interface LastImport {
-  sourceType: 'utmify_orders' | 'utmify_daily_aggregate'
+  sourceType: 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown' | 'meta_ads_structure'
   fileName: string
   importedAt: string
-  rows: UtmifySession[] | UtmifyDailyRow[]
+  rows: UtmifySession[] | UtmifyDailyRow[] | UtmifyBreakdownRow[]
   summary: ImportSummary
+  fileHash?: string
+  importMode?: ImportMode
+  // Only present for utmify_utm_breakdown
+  breakdownLevel?: BreakdownLevel
+  dimensionField?: string
+  dimensionLabel?: string
+  ignoredFooterRowsCount?: number
 }
 
-// ── localStorage I/O ─────────────────────────────────────────────────────────
+const META_STRUCTURE_KEY = 'pitbrain:currentMetaStructure'
 
-const STORAGE_KEY = 'pitbrain:lastImport'
-
-export function saveLastImport(data: LastImport): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-    console.log('[pitbrain] Saved to localStorage:', {
-      sourceType: data.sourceType,
-      fileName: data.fileName,
-      rows: data.rows.length,
-    })
-  } catch (err) {
-    console.error('[pitbrain] Failed to save to localStorage:', err)
-  }
+export interface MetaStructureInfo {
+  fileName: string
+  sessionId: string
+  importedAt: string
+  rowCount: number
 }
 
-export function loadLastImport(): LastImport | null {
+export function saveMetaStructureInfo(info: MetaStructureInfo): void {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as LastImport
-    console.log('[pitbrain] Loaded from localStorage:', {
-      sourceType: parsed.sourceType,
-      fileName: parsed.fileName,
-      rows: parsed.rows?.length ?? 0,
-      importedAt: parsed.importedAt,
-    })
-    return parsed
-  } catch (err) {
-    console.error('[pitbrain] Failed to load from localStorage:', err)
+    localStorage.setItem(META_STRUCTURE_KEY, JSON.stringify(info))
+  } catch {}
+}
+
+export function loadMetaStructureInfo(): MetaStructureInfo | null {
+  try {
+    const raw = localStorage.getItem(META_STRUCTURE_KEY)
+    return raw ? (JSON.parse(raw) as MetaStructureInfo) : null
+  } catch {
     return null
   }
 }
 
+export function emptyImportSummary(): ImportSummary {
+  return {
+    startDate: null, endDate: null, days: 0,
+    spend: 0, revenue: 0, profit: 0, purchases: 0,
+    initiateCheckout: 0, addToCart: 0, clicks: 0, impressions: 0, pageViews: 0,
+    roas: null, roi: null, cpa: null, cpi: null, cpc: null, ctr: null, cpm: null,
+  }
+}
+
+// ── Storage keys ─────────────────────────────────────────────────────────────
+
+const CURRENT_DATASET_KEY  = 'pitbrain:currentDataset'
+const IMPORT_HISTORY_KEY   = 'pitbrain:importHistory'
+export const WINNER_LIBRARY_KEY = 'pitbrain:winnerLibrary'
+const LEGACY_KEY           = 'pitbrain:lastImport'
+
+// ── File hash ────────────────────────────────────────────────────────────────
+
+export async function generateFileHash(file: File): Promise<string> {
+  const head = await file.slice(0, 4096).text()
+  const str = `${file.name}|${file.size}|${head}`
+  let hash = 5381
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i)
+    hash = hash & hash // keep 32-bit
+  }
+  return Math.abs(hash).toString(36)
+}
+
+// ── Current dataset I/O ──────────────────────────────────────────────────────
+
+export function saveCurrentDataset(data: LastImport): void {
+  try {
+    localStorage.setItem(CURRENT_DATASET_KEY, JSON.stringify(data))
+  } catch (err) {
+    console.error('[pitbrain] Failed to save currentDataset:', err)
+  }
+}
+
+export function loadCurrentDataset(): LastImport | null {
+  try {
+    const raw = localStorage.getItem(CURRENT_DATASET_KEY)
+    if (raw) return JSON.parse(raw) as LastImport
+    // Migrate from old key
+    const legacy = localStorage.getItem(LEGACY_KEY)
+    if (legacy) {
+      localStorage.setItem(CURRENT_DATASET_KEY, legacy)
+      localStorage.removeItem(LEGACY_KEY)
+      return JSON.parse(legacy) as LastImport
+    }
+    return null
+  } catch (err) {
+    console.error('[pitbrain] Failed to load currentDataset:', err)
+    return null
+  }
+}
+
+export function clearCurrentDataset(): void {
+  try {
+    localStorage.removeItem(CURRENT_DATASET_KEY)
+    localStorage.removeItem(LEGACY_KEY)
+  } catch {}
+}
+
+// ── Import history (metadata only — no rows) ─────────────────────────────────
+
+export function loadImportHistory(): ImportSession[] {
+  try {
+    const raw = localStorage.getItem(IMPORT_HISTORY_KEY)
+    return raw ? (JSON.parse(raw) as ImportSession[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function addToImportHistory(session: ImportSession): void {
+  try {
+    const history = loadImportHistory()
+    // Replace same id, then limit to 20 entries
+    const updated = [session, ...history.filter(h => h.id !== session.id)].slice(0, 20)
+    localStorage.setItem(IMPORT_HISTORY_KEY, JSON.stringify(updated))
+  } catch (err) {
+    console.error('[pitbrain] Failed to save import history:', err)
+  }
+}
+
+export function clearImportHistory(): void {
+  try {
+    localStorage.removeItem(IMPORT_HISTORY_KEY)
+  } catch {}
+}
+
+// ── Dataset merge ────────────────────────────────────────────────────────────
+
+function getOrderKey(row: UtmifySession): string {
+  return `${row.orderDate ?? ''}|${row.grossRevenue ?? ''}|${row.status ?? ''}|${row.utmCampaign ?? ''}`
+}
+
+export function mergeDatasets(current: LastImport, next: LastImport): LastImport {
+  if (current.sourceType !== next.sourceType) return next
+
+  if (next.sourceType === 'utmify_utm_breakdown') {
+    const currentRows = current.rows as UtmifyBreakdownRow[]
+    const nextRows = next.rows as UtmifyBreakdownRow[]
+    const byDimension = new Map<string, UtmifyBreakdownRow>()
+    for (const r of currentRows) byDimension.set(r.dimensionName, r)
+    for (const r of nextRows) byDimension.set(r.dimensionName, r) // newer wins
+    const merged = Array.from(byDimension.values())
+    return { ...next, rows: merged }
+  }
+
+  if (next.sourceType === 'utmify_daily_aggregate') {
+    const currentRows = current.rows as UtmifyDailyRow[]
+    const nextRows = next.rows as UtmifyDailyRow[]
+    const byDate = new Map<string, UtmifyDailyRow>()
+    for (const r of currentRows) if (r.date) byDate.set(r.date, r)
+    for (const r of nextRows) if (r.date) byDate.set(r.date, r) // newer wins
+    const merged = Array.from(byDate.values()).sort((a, b) =>
+      (a.date ?? '').localeCompare(b.date ?? ''))
+    return {
+      ...next,
+      rows: merged,
+      summary: buildImportSummary({ sourceType: next.sourceType, rows: merged } as UtmifyParseResult),
+    }
+  }
+
+  if (next.sourceType === 'utmify_orders') {
+    const currentRows = current.rows as UtmifySession[]
+    const nextRows = next.rows as UtmifySession[]
+    const byKey = new Map<string, UtmifySession>()
+    for (const r of currentRows) byKey.set(getOrderKey(r), r)
+    for (const r of nextRows) byKey.set(getOrderKey(r), r) // newer wins
+    const merged = Array.from(byKey.values())
+    return {
+      ...next,
+      rows: merged,
+      summary: buildImportSummary({ sourceType: next.sourceType, rows: merged } as UtmifyParseResult),
+    }
+  }
+
+  return next
+}
+
+// ── Backward-compat aliases ───────────────────────────────────────────────────
+
+/** @deprecated Use saveCurrentDataset */
+export function saveLastImport(data: LastImport): void { saveCurrentDataset(data) }
+/** @deprecated Use loadCurrentDataset */
+export function loadLastImport(): LastImport | null { return loadCurrentDataset() }
+
 // ── Summary calculation ──────────────────────────────────────────────────────
 
 export function buildImportSummary(parseResult: UtmifyParseResult): ImportSummary {
+  if (parseResult.sourceType === 'utmify_utm_breakdown') {
+    const rows = parseResult.rows
+    const spend = rows.reduce((s, r) => s + safeNumber(r.spend), 0)
+    const revenue = rows.reduce((s, r) => s + safeNumber(r.revenue), 0)
+    const profit = rows.reduce((s, r) => s + safeNumber(r.profit), 0)
+    const purchases = rows.reduce((s, r) => s + safeNumber(r.purchases), 0)
+    const ic = rows.reduce((s, r) => s + safeNumber(r.ic), 0)
+    const atc = rows.reduce((s, r) => s + safeNumber(r.addToCart), 0)
+    const clicks = rows.reduce((s, r) => s + safeNumber(r.clicks), 0)
+    const impressions = rows.reduce((s, r) => s + safeNumber(r.impressions), 0)
+    const pageViews = rows.reduce((s, r) => s + safeNumber(r.pageViews), 0)
+
+    return {
+      startDate: null,
+      endDate: null,
+      days: 0,
+      spend,
+      revenue,
+      profit,
+      purchases,
+      initiateCheckout: ic,
+      addToCart: atc,
+      clicks,
+      impressions,
+      pageViews,
+      roas: spend > 0 ? safeDivide(revenue, spend) : null,
+      roi: spend > 0 ? safeDivide(profit, spend) : null,
+      cpa: purchases > 0 ? safeDivide(spend, purchases) : null,
+      cpi: ic > 0 ? safeDivide(spend, ic) : null,
+      cpc: clicks > 0 ? safeDivide(spend, clicks) : null,
+      ctr: impressions > 0 ? safeDivide(clicks, impressions) : null,
+      cpm: impressions > 0 ? safeDivide(spend, impressions) * 1000 : null,
+      ignoredFooterRowsCount: parseResult.ignoredFooterRowsCount,
+    }
+  }
+
   if (parseResult.sourceType === 'utmify_daily_aggregate') {
     const rows = parseResult.rows as UtmifyDailyRow[]
     const spend = rows.reduce((s, r) => s + safeNumber(r.spend), 0)
@@ -102,6 +287,7 @@ export function buildImportSummary(parseResult: UtmifyParseResult): ImportSummar
     const profit = rows.reduce((s, r) => s + safeNumber(r.profit), 0)
     const purchases = rows.reduce((s, r) => s + safeNumber(r.purchases), 0)
     const ic = rows.reduce((s, r) => s + safeNumber(r.initiateCheckout), 0)
+    const atc = rows.reduce((s, r) => s + safeNumber(r.addToCart), 0)
     const clicks = rows.reduce((s, r) => s + safeNumber(r.clicks), 0)
     const impressions = rows.reduce((s, r) => s + safeNumber(r.impressions), 0)
     const pageViews = rows.reduce((s, r) => s + safeNumber(r.pageViews), 0)
@@ -116,6 +302,7 @@ export function buildImportSummary(parseResult: UtmifyParseResult): ImportSummar
       profit,
       purchases,
       initiateCheckout: ic,
+      addToCart: atc,
       clicks,
       impressions,
       pageViews,
@@ -261,8 +448,62 @@ function buildFunnelFromOrders(rows: UtmifySession[]): FunnelMetrics {
   }
 }
 
+function emptyFunnel(): FunnelMetrics {
+  return {
+    spend: 0, revenue: 0, roas: 0, cpa: 0, ctr: 0, cpc: 0, cpm: 0,
+    impressions: 0, clicks: 0, reach: 0, pageViews: 0,
+    initiateCheckouts: 0, purchases: 0,
+    clickToPurchaseRate: 0, pageViewToCheckoutRate: 0, checkoutToPurchaseRate: 0,
+  }
+}
+
+function buildFunnelFromBreakdown(rows: UtmifyBreakdownRow[]): FunnelMetrics {
+  const spend = rows.reduce((s, r) => s + safeNumber(r.spend), 0)
+  const revenue = rows.reduce((s, r) => s + safeNumber(r.revenue), 0)
+  const purchases = rows.reduce((s, r) => s + safeNumber(r.purchases), 0)
+  const clicks = rows.reduce((s, r) => s + safeNumber(r.clicks), 0)
+  const impressions = rows.reduce((s, r) => s + safeNumber(r.impressions), 0)
+  const pageViews = rows.reduce((s, r) => s + safeNumber(r.pageViews), 0)
+  const ic = rows.reduce((s, r) => s + safeNumber(r.ic), 0)
+
+  // Always recalculate ratios from aggregated totals — never sum per-row ratios
+  const ctr = safeDivide(clicks, impressions)
+  const cpm = impressions > 0 ? safeDivide(spend, impressions) * 1000 : 0
+  const cpc = safeDivide(spend, clicks)
+
+  return {
+    spend,
+    revenue,
+    roas: safeDivide(revenue, spend),
+    cpa: purchases > 0 ? safeDivide(spend, purchases) : 0,
+    ctr,
+    cpc,
+    cpm,
+    impressions,
+    clicks,
+    reach: 0,
+    pageViews,
+    initiateCheckouts: ic,
+    purchases,
+    clickToPurchaseRate: safeDivide(purchases, clicks),
+    pageViewToCheckoutRate: safeDivide(ic, pageViews),
+    checkoutToPurchaseRate: safeDivide(purchases, ic),
+  }
+}
+
 export function buildSummaryMetrics(lastImport: LastImport): SummaryMetrics {
   const sessionId = 'local:' + lastImport.importedAt
+
+  // Structure files have no performance data — return empty metrics
+  if (lastImport.sourceType === 'meta_ads_structure') {
+    return { overall: emptyFunnel(), byCampaign: [], dateRange: { from: '', to: '' }, sessionId }
+  }
+
+  if (lastImport.sourceType === 'utmify_utm_breakdown') {
+    const rows = lastImport.rows as UtmifyBreakdownRow[]
+    const overall = buildFunnelFromBreakdown(rows)
+    return { overall, byCampaign: [], dateRange: { from: '', to: '' }, sessionId }
+  }
 
   if (lastImport.sourceType === 'utmify_daily_aggregate') {
     const rows = lastImport.rows as UtmifyDailyRow[]

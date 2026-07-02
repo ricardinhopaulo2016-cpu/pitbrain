@@ -2,71 +2,94 @@ import { SummaryMetrics } from '@/types/metrics'
 import { formatCurrency, formatPercent, formatNumber } from '@/lib/utils'
 
 export function buildDiagnosisPrompt(metrics: SummaryMetrics): { system: string; user: string } {
-  const { overall, byCampaign } = metrics
+  const { overall: o, byCampaign } = metrics
 
-  const system = `Você é um especialista em tráfego pago com foco em Meta Ads.
-Você analisa métricas calculadas de campanhas e produz diagnósticos estruturados por estágio de funil.
+  const system = `Você é um gestor de tráfego pago sênior especializado em Meta Ads.
+Analise as métricas fornecidas e produza um diagnóstico estruturado por estágio de funil.
 
 REGRAS ABSOLUTAS:
-- Use SOMENTE os dados fornecidos. Não invente métricas nem suponha valores.
-- Calcule nada: todos os valores já foram calculados. Interprete-os.
-- Separe o diagnóstico em topo, meio e fundo de funil.
-- Seja objetivo. Evite textos genéricos.
-- Retorne EXATAMENTE o JSON especificado, sem campos extras.
+- Use SOMENTE os dados fornecidos. Não invente nem suponha valores.
+- Todos os valores já foram calculados — apenas interprete-os.
+- Seja objetivo e direto. Sem frases genéricas ou de marketing.
+- Retorne EXATAMENTE o JSON especificado, sem texto adicional, sem markdown.
 
-FORMATO DE RESPOSTA (JSON puro):
+THRESHOLDS DE REFERÊNCIA:
+- ROAS: <1.5 = critico | 1.5-2.0 = atencao | >2.0 = bom
+- ROI: <0% = critico | 0-15% = atencao | >15% = bom
+- CTR: <1.5% = atencao | >2.0% = bom
+- CPC: >R$5 = critico | R$3-5 = atencao | <R$3 = bom
+- CPM: >R$90 = critico | R$60-90 = atencao | <R$60 = bom
+- PV→IC/Add To Cart: <8% = critico | 8-12% = atencao | >12% = bom
+- IC/Add To Cart→Venda: <15% = critico | 15-20% = atencao | >20% = bom
+
+FORMATO DE RESPOSTA (JSON puro, sem markdown):
 {
-  "executiveSummary": "string — 2-3 frases sobre o estado geral",
+  "executiveSummary": "2-3 frases sobre o estado geral da operação",
   "topFunnel": {
-    "diagnosis": "string — análise de impressões, alcance, CTR, CPM, CPC",
-    "score": "bom | atenção | crítico",
-    "keyMetrics": ["array de métricas relevantes mencionadas"]
+    "status": "bom | atencao | critico",
+    "diagnosis": "análise de CTR, CPC, CPM e qualidade dos criativos",
+    "evidence": ["métrica: valor — interpretação", "..."],
+    "actions": ["ação concreta 1", "ação concreta 2"]
   },
-  "midFunnel": {
-    "diagnosis": "string — análise de page views, taxa page view → checkout",
-    "score": "bom | atenção | crítico",
-    "keyMetrics": ["array de métricas relevantes mencionadas"]
+  "middleFunnel": {
+    "status": "bom | atencao | critico",
+    "diagnosis": "análise da taxa page view → checkout e qualidade da página",
+    "evidence": ["métrica: valor — interpretação", "..."],
+    "actions": ["ação concreta 1", "ação concreta 2"]
   },
   "bottomFunnel": {
-    "diagnosis": "string — análise de checkout → compra, CPA, ROAS",
-    "score": "bom | atenção | crítico",
-    "keyMetrics": ["array de métricas relevantes mencionadas"]
+    "status": "bom | atencao | critico",
+    "diagnosis": "análise de ROAS, ROI, CPA e taxa IC→Venda",
+    "evidence": ["métrica: valor — interpretação", "..."],
+    "actions": ["ação concreta 1", "ação concreta 2"]
   },
-  "mainBottleneck": "string — onde está o maior gargalo e por quê",
-  "goodCampaigns": ["lista de nomes de campanhas com bom desempenho"],
-  "badCampaigns": ["lista de nomes de campanhas com mau desempenho"],
-  "recommendedActions": ["lista de 3-5 ações concretas, baseadas nos dados"],
-  "testsForTomorrow": ["lista de 2-3 testes rápidos para executar"],
-  "risks": ["lista de 2-3 riscos identificados nos dados"]
+  "mainBottleneck": "descrição clara de onde está o maior gargalo e por quê",
+  "recommendedActions": [
+    {
+      "action": "ação específica e executável",
+      "reason": "por que esta ação resolve o problema identificado",
+      "priority": "alta | media | baixa",
+      "risk": "baixo | medio | alto"
+    }
+  ],
+  "testsForTomorrow": [
+    {
+      "test": "nome do teste",
+      "hypothesis": "o que se espera que aconteça e por quê",
+      "successMetric": "métrica e valor que define sucesso em X dias"
+    }
+  ],
+  "risks": ["risco operacional identificado 1", "risco 2"],
+  "nextDecision": "próxima decisão táctica mais importante a tomar agora"
 }`
 
-  const o = overall
   const campaignSummary = byCampaign
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 10)
-    .map(c => `- ${c.campaignName}: gasto=${formatCurrency(c.spend)}, receita=${formatCurrency(c.revenue)}, ROAS=${formatNumber(c.roas)}, CPA=${formatCurrency(c.cpa)}, CTR=${formatPercent(c.ctr)}, CPC=${formatCurrency(c.cpc)}, compras=${c.purchases}, checkout→compra=${formatPercent(c.checkoutToPurchaseRate)}`)
+    .map(c =>
+      `- ${c.campaignName}: gasto=${formatCurrency(c.spend)}, receita=${formatCurrency(c.revenue)}, ROAS=${c.roas.toFixed(2)}, CPA=${formatCurrency(c.cpa)}, CTR=${formatPercent(c.ctr)}, CPC=${formatCurrency(c.cpc)}, compras=${c.purchases}, IC→Venda=${formatPercent(c.checkoutToPurchaseRate)}`
+    )
     .join('\n')
 
   const user = `MÉTRICAS GERAIS (período: ${metrics.dateRange.from} a ${metrics.dateRange.to}):
 Gasto total: ${formatCurrency(o.spend)}
 Receita total: ${formatCurrency(o.revenue)}
-ROAS: ${formatNumber(o.roas)}
+ROAS: ${o.roas.toFixed(2)}x
+ROI: ${o.spend > 0 ? (((o.revenue - o.spend) / o.spend) * 100).toFixed(1) : '0.0'}%
 CPA: ${formatCurrency(o.cpa)}
 Impressões: ${formatNumber(o.impressions, 0)}
-Alcance: ${formatNumber(o.reach, 0)}
 Cliques: ${formatNumber(o.clicks, 0)}
 CTR: ${formatPercent(o.ctr)}
 CPC: ${formatCurrency(o.cpc)}
 CPM: ${formatCurrency(o.cpm)}
 Page Views: ${formatNumber(o.pageViews, 0)}
-Checkouts iniciados: ${formatNumber(o.initiateCheckouts, 0)}
+IC/Add To Cart: ${formatNumber(o.initiateCheckouts, 0)}
 Compras: ${formatNumber(o.purchases, 0)}
-Taxa clique→compra: ${formatPercent(o.clickToPurchaseRate)}
-Taxa page view→checkout: ${formatPercent(o.pageViewToCheckoutRate)}
-Taxa checkout→compra: ${formatPercent(o.checkoutToPurchaseRate)}
+Taxa PV→IC/Add To Cart: ${formatPercent(o.pageViewToCheckoutRate)}
+Taxa IC/Add To Cart→Venda: ${formatPercent(o.checkoutToPurchaseRate)}
 
 CAMPANHAS (top 10 por gasto):
-${campaignSummary}
+${campaignSummary || 'Sem dados de campanha desagregados.'}
 
 Produza o diagnóstico completo no formato JSON especificado.`
 

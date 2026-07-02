@@ -3,13 +3,28 @@
 import { useState } from 'react'
 import { useSessionStore } from '@/store/sessionStore'
 import { parseUtmifyFile } from '@/lib/parsers/utmify-parser'
-import { buildImportSummary, saveLastImport } from '@/lib/calculators/local-metrics'
+import {
+  buildImportSummary,
+  saveCurrentDataset,
+  generateFileHash,
+  loadImportHistory,
+  addToImportHistory,
+  LastImport,
+} from '@/lib/calculators/local-metrics'
+import {
+  saveImportToList,
+  setActiveImportId,
+  buildPitbrainImport,
+} from '@/lib/storage/imports'
+import type { ImportSession } from '@/types/import'
+import type { UtmifyDailyRow, UtmifySession } from '@/types/utmify'
 
-type UploadStatus = 'idle' | 'uploading' | 'success' | 'error'
+type UploadStatus = 'idle' | 'uploading' | 'success' | 'error' | 'duplicate'
 
 interface UploadResult {
   sessionId: string
   metaCount: number
+  metaSourceType: string | null
   utmifyCount: number
   utmifySourceType: string | null
   warnings: string[]
@@ -20,51 +35,106 @@ export function useUpload() {
   const [status, setStatus] = useState<UploadStatus>('idle')
   const [result, setResult] = useState<UploadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [duplicateSession, setDuplicateSession] = useState<ImportSession | null>(null)
   const { setSessionId, reset } = useSessionStore()
 
-  async function upload(metaFile: File | null, utmifyFile: File | null) {
+  async function upload(utmifyFile: File | null, opts: { force?: boolean } = {}) {
+    if (!utmifyFile) {
+      setError('Selecione um arquivo da UTMify.')
+      return
+    }
+
     setStatus('uploading')
     setError(null)
+    setDuplicateSession(null)
 
     const form = new FormData()
-    if (metaFile) form.append('meta', metaFile)
-    if (utmifyFile) form.append('utmify', utmifyFile)
+    form.append('utmify', utmifyFile)
 
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: form })
-      const data = await res.json()
+      const [apiRes, parseResult] = await Promise.all([
+        fetch('/api/upload', { method: 'POST', body: form }),
+        parseUtmifyFile(utmifyFile).catch(err => {
+          console.error('[pitbrain] Client-side parse failed:', err)
+          return null
+        }),
+      ])
 
-      if (!res.ok) {
-        setError(data.error ?? 'Erro desconhecido.')
+      const apiData = await apiRes.json()
+
+      if (!apiRes.ok) {
+        setError(apiData.error ?? 'Erro desconhecido.')
         setStatus('error')
         return
       }
 
-      // Clear old session metrics so the dashboard reads fresh data
-      reset()
-      setSessionId(data.sessionId)
+      // Hash + duplicate check
+      let fileHash = ''
+      if (parseResult) {
+        fileHash = await generateFileHash(utmifyFile)
 
-      // Parse UTMify file client-side and persist to localStorage
-      if (utmifyFile) {
-        try {
-          const parseResult = await parseUtmifyFile(utmifyFile)
-          if (parseResult.rows.length > 0) {
-            const summary = buildImportSummary(parseResult)
-            saveLastImport({
-              sourceType: parseResult.sourceType,
-              fileName: utmifyFile.name,
-              importedAt: new Date().toISOString(),
-              rows: parseResult.rows,
-              summary,
-            })
+        if (!opts.force) {
+          const history = loadImportHistory()
+          const dup = history.find(h => h.fileHash === fileHash)
+          if (dup) {
+            setDuplicateSession(dup)
+            setStatus('duplicate')
+            return
           }
-        } catch (parseErr) {
-          // localStorage save is best-effort — don't block the upload result
-          console.error('[pitbrain] Client-side parse for localStorage failed:', parseErr)
         }
       }
 
-      setResult(data as UploadResult)
+      // Build and save the import
+      if (parseResult && parseResult.rows.length > 0) {
+        const summary   = buildImportSummary(parseResult)
+        const dateRange = extractDateRange(utmifyFile.name, parseResult)
+
+        // Save to new pitbrain:imports list
+        const pitbrainImport = buildPitbrainImport({
+          parseResult,
+          fileName: utmifyFile.name,
+          fileHash,
+          summary,
+          dateRange,
+        })
+        saveImportToList(pitbrainImport)
+        setActiveImportId(pitbrainImport.id)
+
+        // Keep pitbrain:currentDataset in sync so useMetrics keeps working
+        const lastImport: LastImport = {
+          sourceType:   parseResult.sourceType,
+          fileName:     utmifyFile.name,
+          importedAt:   pitbrainImport.createdAt,
+          rows:         parseResult.rows as LastImport['rows'],
+          summary,
+          fileHash,
+          importMode:   'replace_current',
+          ...(parseResult.sourceType === 'utmify_utm_breakdown' ? {
+            breakdownLevel:         parseResult.breakdownLevel,
+            dimensionField:         parseResult.dimensionField,
+            dimensionLabel:         parseResult.dimensionLabel,
+            ignoredFooterRowsCount: parseResult.ignoredFooterRowsCount,
+          } : {}),
+        }
+        saveCurrentDataset(lastImport)
+
+        // Keep legacy import history for duplicate detection
+        addToImportHistory({
+          id:          pitbrainImport.id,
+          fileName:    utmifyFile.name,
+          fileHash,
+          sourceType:  parseResult.sourceType,
+          importedAt:  pitbrainImport.createdAt,
+          rowCount:    parseResult.rows.length,
+          dateRange:   dateRange,
+          mode:        'replace_current',
+          hasStoredData: true,
+        })
+      }
+
+      reset()
+      setSessionId(apiData.sessionId)
+      setResult(apiData as UploadResult)
       setStatus('success')
     } catch {
       setError('Falha de rede. Tente novamente.')
@@ -72,11 +142,43 @@ export function useUpload() {
     }
   }
 
+  async function forceUpload(utmifyFile: File | null) {
+    return upload(utmifyFile, { force: true })
+  }
+
   function resetUpload() {
     setStatus('idle')
     setResult(null)
     setError(null)
+    setDuplicateSession(null)
   }
 
-  return { upload, status, result, error, reset: resetUpload }
+  return {
+    upload,
+    forceUpload,
+    status,
+    result,
+    error,
+    reset: resetUpload,
+    duplicateSession,
+  }
+}
+
+function extractDateRange(
+  fileName: string,
+  parseResult: NonNullable<Awaited<ReturnType<typeof parseUtmifyFile>>>
+): { start: string; end: string } | undefined {
+  if (parseResult.sourceType === 'utmify_daily_aggregate') {
+    const rows = parseResult.rows as UtmifyDailyRow[]
+    const dates = rows.map(r => r.date).filter((d): d is string => !!d).sort()
+    if (!dates.length) return undefined
+    return { start: dates[0], end: dates[dates.length - 1] }
+  }
+  if (parseResult.sourceType === 'utmify_orders') {
+    const rows = parseResult.rows as UtmifySession[]
+    const dates = rows.map(r => r.orderDate).filter((d): d is string => !!d).sort()
+    if (!dates.length) return undefined
+    return { start: dates[0], end: dates[dates.length - 1] }
+  }
+  return undefined
 }

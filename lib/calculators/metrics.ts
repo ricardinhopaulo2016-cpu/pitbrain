@@ -44,25 +44,30 @@ export function calculateMetrics(
   utmifyRows: UtmifySession[],
   sessionId: string
 ): SummaryMetrics {
-  // Aggregate UTMify by campaign
+  // Aggregate UTMify by campaign.
+  // Rows may actually be UtmifyDailyRow (daily aggregate) even though typed as UtmifySession —
+  // guard every field access to avoid TypeError on missing fields.
   const utmByCampaign = new Map<string, { revenue: number; purchases: number; pageViews: number; checkouts: number }>()
 
   for (const session of utmifyRows) {
-    const key = session.utmCampaign || '__unknown__'
+    const r = session as unknown as Record<string, unknown>
+    const key = (r.utmCampaign as string | null) || '__unknown__'
     const current = utmByCampaign.get(key) ?? { revenue: 0, purchases: 0, pageViews: 0, checkouts: 0 }
-    if (isPaidOrder(session.status)) {
-      current.revenue += session.grossRevenue
+    const status = r.status as string | undefined
+    if (status && isPaidOrder(status)) {
+      current.revenue += Number(r.grossRevenue) || 0
       current.purchases += 1
     }
-    current.pageViews += session.pageViews
-    current.checkouts += session.initiateCheckouts
+    // UtmifyDailyRow uses 'initiateCheckout' (singular); UtmifySession uses 'initiateCheckouts' (plural)
+    current.pageViews += Number(r.pageViews) || 0
+    current.checkouts += Number(r.initiateCheckouts ?? r.initiateCheckout) || 0
     utmByCampaign.set(key, current)
   }
 
   // Group Meta rows by campaign
   const metaByCampaign = new Map<string, MetaCampaign[]>()
   for (const row of metaRows) {
-    const key = row.campaignName
+    const key = row.campaignName || 'Sem nome'
     const existing = metaByCampaign.get(key) ?? []
     existing.push(row)
     metaByCampaign.set(key, existing)
@@ -118,15 +123,30 @@ export function calculateMetrics(
     totalPurchases += purchases
   }
 
-  // If no Meta data but UTMify exists, aggregate UTMify totals
+  // If no Meta data but UTMify exists, aggregate UTMify totals.
+  // Handle both UtmifySession (orders) and UtmifyDailyRow (daily aggregate) safely.
   if (metaRows.length === 0) {
     for (const session of utmifyRows) {
-      if (isPaidOrder(session.status)) {
-        totalRevenue += session.grossRevenue
-        totalPurchases += 1
+      const r = session as unknown as Record<string, unknown>
+      if (r.sourceType === 'utmify_daily_aggregate') {
+        // Daily aggregate row: revenue, spend, etc. are top-level fields
+        totalRevenue    += Number(r.revenue) || 0
+        totalPurchases  += Number(r.purchases) || 0
+        totalPageViews  += Number(r.pageViews) || 0
+        totalCheckouts  += Number(r.initiateCheckout) || 0
+        totalSpend      += Number(r.spend) || 0
+        totalImpressions += Number(r.impressions) || 0
+        totalClicks     += Number(r.clicks) || 0
+      } else {
+        // Orders row: derive revenue from paid orders
+        const status = r.status as string | undefined
+        if (status && isPaidOrder(status)) {
+          totalRevenue   += Number(r.grossRevenue) || 0
+          totalPurchases += 1
+        }
+        totalPageViews  += Number(r.pageViews) || 0
+        totalCheckouts  += Number(r.initiateCheckouts) || 0
       }
-      totalPageViews += session.pageViews
-      totalCheckouts += session.initiateCheckouts
     }
   }
 

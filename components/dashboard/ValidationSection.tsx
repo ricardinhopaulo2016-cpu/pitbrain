@@ -7,7 +7,7 @@ import { ShieldCheck } from 'lucide-react'
 interface Props {
   overall: FunnelMetrics
   summary: ImportSummary | null
-  sourceType: 'utmify_orders' | 'utmify_daily_aggregate' | null
+  sourceType: 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown' | 'meta_ads_structure' | null
 }
 
 function fC(v: number): string {
@@ -72,7 +72,7 @@ function buildRow(
 export function ValidationSection({ overall, summary, sourceType }: Props) {
   const { spend, revenue, purchases, clicks, impressions, pageViews, initiateCheckouts } = overall
 
-  const isDailyAggregate = sourceType === 'utmify_daily_aggregate'
+  const isDailyAggregate = sourceType === 'utmify_daily_aggregate' || sourceType === 'utmify_utm_breakdown'
   const profit: number | null = isDailyAggregate ? (summary?.profit ?? null) : null
 
   const totals = [
@@ -80,7 +80,7 @@ export function ValidationSection({ overall, summary, sourceType }: Props) {
     { label: 'Faturamento',     value: fC(revenue) },
     { label: 'Lucro',           value: profit !== null ? fC(profit) : '—' },
     { label: 'Vendas',          value: fN(purchases) },
-    { label: 'IC',              value: fN(initiateCheckouts) },
+    { label: 'IC/Add To Cart',  value: fN(initiateCheckouts) },
     { label: 'Cliques',         value: fN(clicks) },
     { label: 'Impressões',      value: fN(impressions) },
     { label: 'Page Views',      value: fN(pageViews) },
@@ -93,12 +93,12 @@ export function ValidationSection({ overall, summary, sourceType }: Props) {
     buildRow('ROAS',          'Faturamento ÷ Gasto',            revenue,           spend,              fC(revenue),                    fC(spend),                         1,    fX,                   'Gasto = 0'),
     buildRow('ROI',           'Lucro ÷ Gasto × 100',            profit,            spend,              profit !== null ? fC(profit) : '—', fC(spend),                  100,  fP,                   roiNaReason),
     buildRow('CPA',           'Gasto ÷ Vendas',                 spend,             purchases,          fC(spend),                      `${fN(purchases)} vendas`,         1,    fC,                   'Vendas = 0'),
-    buildRow('CPI',           'Gasto ÷ IC',                     spend,             initiateCheckouts,  fC(spend),                      `${fN(initiateCheckouts)} IC`,     1,    fC,                   'IC = 0'),
+    buildRow('CPI',           'Gasto ÷ IC/ATC',                 spend,             initiateCheckouts,  fC(spend),                      `${fN(initiateCheckouts)} IC/ATC`, 1,    fC,                   'IC/Add To Cart = 0'),
     buildRow('CPC',           'Gasto ÷ Cliques',                spend,             clicks,             fC(spend),                      `${fN(clicks)} cliques`,           1,    fC,                   'Cliques = 0'),
     buildRow('CTR',           'Cliques ÷ Impressões × 100',     clicks,            impressions,        `${fN(clicks)} cliques`,        `${fN(impressions)} imp`,          100,  (v) => fP(v, 4),      'Impressões = 0'),
     buildRow('CPM',           'Gasto ÷ Impressões × 1000',      spend,             impressions,        fC(spend),                      `${fN(impressions)} imp`,          1000, fC,                   'Impressões = 0'),
-    buildRow('PV → IC',       'IC ÷ Page Views × 100',          initiateCheckouts, pageViews,          `${fN(initiateCheckouts)} IC`,  `${fN(pageViews)} PV`,             100,  fP,                   'Page Views = 0'),
-    buildRow('IC → Venda',    'Vendas ÷ IC × 100',              purchases,         initiateCheckouts,  `${fN(purchases)} vendas`,      `${fN(initiateCheckouts)} IC`,     100,  fP,                   'IC = 0'),
+    buildRow('PV → IC/ATC',   'IC/ATC ÷ Page Views × 100',      initiateCheckouts, pageViews,          `${fN(initiateCheckouts)} IC/ATC`, `${fN(pageViews)} PV`,          100,  fP,                   'Page Views ausente neste import'),
+    buildRow('IC/ATC → Venda','Vendas ÷ IC/ATC × 100',          purchases,         initiateCheckouts,  `${fN(purchases)} vendas`,      `${fN(initiateCheckouts)} IC/ATC`, 100,  fP,                   'IC/Add To Cart = 0'),
     buildRow('Clique → Venda','Vendas ÷ Cliques × 100',         purchases,         clicks,             `${fN(purchases)} vendas`,      `${fN(clicks)} cliques`,           100,  fP,                   'Cliques = 0'),
   ]
 
