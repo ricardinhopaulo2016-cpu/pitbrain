@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { getSupabaseClient } from '@/lib/supabase'
 import { callDiagnosis } from '@/lib/openai'
 import { MissingAPIKeyError } from '@/lib/ai'
 import { SummaryMetrics } from '@/types/metrics'
@@ -15,10 +15,14 @@ export async function POST(req: NextRequest) {
 
     const diagnosis = await callDiagnosis(metrics)
 
-    const supabase = createServerClient()
-    await supabase
-      .from('diagnoses')
-      .upsert({ session_id: sessionId, payload: diagnosis }, { onConflict: 'session_id' })
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      await supabase
+        .from('diagnoses')
+        .upsert({ session_id: sessionId, payload: diagnosis }, { onConflict: 'session_id' })
+    } else if (process.env.NODE_ENV === 'development') {
+      console.warn('[analyze] Supabase não configurado — diagnóstico não foi persistido (apenas retornado).')
+    }
 
     return NextResponse.json(diagnosis)
   } catch (err: unknown) {

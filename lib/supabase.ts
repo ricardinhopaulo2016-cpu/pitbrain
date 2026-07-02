@@ -1,13 +1,22 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+let cachedClient: SupabaseClient | null | undefined
 
-// Browser client (limited permissions)
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+/**
+ * Lazy, build-safe Supabase client. Returns null when env vars are missing
+ * instead of throwing, so builds/deploys without Supabase configured don't break.
+ */
+export function getSupabaseClient(): SupabaseClient | null {
+  if (cachedClient !== undefined) return cachedClient
 
-// Server client (full permissions — use only in API routes)
-export function createServerClient() {
-  return createClient(supabaseUrl, supabaseServiceKey)
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    cachedClient = null
+    return cachedClient
+  }
+
+  cachedClient = createClient(supabaseUrl, supabaseServiceKey)
+  return cachedClient
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
+import { getSupabaseClient } from '@/lib/supabase'
 import { calculateMetrics } from '@/lib/calculators/metrics'
 import { MetaCampaign } from '@/types/meta'
 import { UtmifySession } from '@/types/utmify'
@@ -12,7 +12,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const supabase = createServerClient()
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      return NextResponse.json(
+        { ok: false, error: 'Supabase não configurado. Configure as variáveis de ambiente ou use o modo local.' },
+        { status: 503 }
+      )
+    }
 
     const [{ data: metaData, error: metaErr }, { data: utmifyData, error: utmErr }] = await Promise.all([
       supabase.from('meta_rows').select('payload').eq('session_id', sessionId),
