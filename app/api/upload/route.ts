@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseClient } from '@/lib/supabase'
+import { getStorageMode } from '@/lib/storage/mode'
 import { parseMetaFileText } from '@/lib/parsers/meta-parser'
 import { parseUtmifyCsv } from '@/lib/parsers/utmify-parser'
 
@@ -29,8 +30,8 @@ export async function POST(req: NextRequest) {
     const supabase = getSupabaseClient()
     if (!supabase) {
       return NextResponse.json(
-        { ok: false, error: 'Supabase não configurado. Configure as variáveis de ambiente ou use o modo local.' },
-        { status: 503 }
+        { ok: false, storageMode: getStorageMode(), error: 'Supabase não configurado. Use o modo local.' },
+        { status: 200 }
       )
     }
 

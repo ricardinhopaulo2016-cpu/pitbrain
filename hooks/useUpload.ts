@@ -16,6 +16,7 @@ import {
   setActiveImportId,
   buildPitbrainImport,
 } from '@/lib/storage/imports'
+import { getStorageMode } from '@/lib/storage/mode'
 import type { ImportSession } from '@/types/import'
 import type { UtmifyDailyRow, UtmifySession } from '@/types/utmify'
 
@@ -61,8 +62,10 @@ export function useUpload() {
       ])
 
       const apiData = await apiRes.json()
+      const isLocalFallback = apiData?.storageMode === 'local'
 
-      if (!apiRes.ok) {
+      // A real API failure — anything other than the expected "no Supabase, use local" response.
+      if (!apiRes.ok && !isLocalFallback) {
         setError(apiData.error ?? 'Erro desconhecido.')
         setStatus('error')
         return
@@ -84,7 +87,8 @@ export function useUpload() {
         }
       }
 
-      // Build and save the import
+      // Build and save the import (works regardless of Supabase availability)
+      let localImportId: string | null = null
       if (parseResult && parseResult.rows.length > 0) {
         const summary   = buildImportSummary(parseResult)
         const dateRange = extractDateRange(utmifyFile.name, parseResult)
@@ -97,6 +101,7 @@ export function useUpload() {
           summary,
           dateRange,
         })
+        localImportId = pitbrainImport.id
         saveImportToList(pitbrainImport)
         setActiveImportId(pitbrainImport.id)
 
@@ -133,8 +138,23 @@ export function useUpload() {
       }
 
       reset()
-      setSessionId(apiData.sessionId)
-      setResult(apiData as UploadResult)
+      const resolvedSessionId = isLocalFallback && localImportId
+        ? `local:${localImportId}`
+        : apiData.sessionId
+      setSessionId(resolvedSessionId)
+      setResult(
+        isLocalFallback
+          ? {
+              sessionId: resolvedSessionId,
+              metaCount: 0,
+              metaSourceType: null,
+              utmifyCount: parseResult?.rows.length ?? 0,
+              utmifySourceType: parseResult?.sourceType ?? null,
+              warnings: [],
+              utmifyMissingColumns: [],
+            }
+          : (apiData as UploadResult)
+      )
       setStatus('success')
     } catch {
       setError('Falha de rede. Tente novamente.')
@@ -161,6 +181,7 @@ export function useUpload() {
     error,
     reset: resetUpload,
     duplicateSession,
+    storageMode: getStorageMode(),
   }
 }
 

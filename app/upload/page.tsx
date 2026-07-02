@@ -142,7 +142,7 @@ export default function UploadPage() {
   const [preview, setPreview] = useState<FilePreviewData | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
 
-  const { upload, forceUpload, status, result, error, reset: resetUpload, duplicateSession } = useUpload()
+  const { upload, forceUpload, status, result, error, reset: resetUpload, duplicateSession, storageMode } = useUpload()
   const router = useRouter()
 
   // Generate preview when file changes
@@ -185,6 +185,21 @@ export default function UploadPage() {
           No momento, o Pitbrain está focado em relatórios UTMify (CSV, XLSX ou XLS).
         </p>
       </div>
+
+      {/* Local mode notice — Supabase not configured */}
+      {storageMode === 'local' && (
+        <div className="bg-pb-purple/[0.07] border border-pb-purple/20 rounded-xl p-4 flex gap-3">
+          <Info className="h-4 w-4 text-pb-purple shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p className="text-xs text-pb-text font-medium">
+              Modo local ativo — este import será salvo apenas neste navegador.
+            </p>
+            <p className="text-[11px] text-pb-muted">
+              Supabase não configurado. Persistência compartilhada desativada.
+            </p>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Dropzone */}

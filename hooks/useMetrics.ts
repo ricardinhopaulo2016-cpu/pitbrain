@@ -54,7 +54,12 @@ export function useMetrics(sessionId?: string) {
         if (!r.ok) throw new Error(`API ${r.status}: ${r.statusText}`)
         return r.json()
       })
-      .then((data: SummaryMetrics) => {
+      .then((data: SummaryMetrics & { ok?: boolean; storageMode?: string }) => {
+        // Supabase not configured and no local dataset — not a critical error, just nothing to show yet.
+        if (data.ok === false && data.storageMode === 'local') {
+          setLoading(false)
+          return
+        }
         console.log('[pitbrain:useMetrics] Loaded from API', { sessionId: data.sessionId })
         setMetrics(data)
         setLoading(false)

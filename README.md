@@ -34,6 +34,19 @@ Além dessas, o projeto também usa variáveis de IA (OpenAI/Anthropic) e Supaba
 
 > ⚠️ **Nunca commitar `.env.local` ou tokens reais.**
 
+## Modo de armazenamento (local vs Supabase)
+
+O Pitbrain detecta automaticamente (`getStorageMode()`) se o Supabase está configurado (`NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY`) e escolhe onde persistir os imports.
+
+**Modo local** (padrão, sem Supabase configurado):
+- Funciona sem Supabase — nenhuma variável adicional é necessária.
+- Usa `localStorage` (`pitbrain:imports`, `pitbrain:activeImportId`).
+- Dados ficam apenas no navegador/dispositivo do usuário.
+
+**Modo Supabase** (futuro):
+- Ativado automaticamente quando as variáveis do Supabase estão presentes.
+- Usado para dados compartilhados entre equipe.
+
 ## Stack
 
-Next.js (App Router) + TypeScript + Supabase.
+Next.js (App Router) + TypeScript + Supabase (opcional).
