@@ -53,7 +53,7 @@ export interface ImportSummary {
 }
 
 export interface LastImport {
-  sourceType: 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown' | 'meta_ads_structure'
+  sourceType: 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown' | 'meta_ads_structure' | 'utmify_mcp'
   fileName: string
   importedAt: string
   rows: UtmifySession[] | UtmifyDailyRow[] | UtmifyBreakdownRow[]

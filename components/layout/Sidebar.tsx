@@ -19,6 +19,7 @@ import {
   RefreshCw,
   EyeOff,
   LogOut,
+  Plug,
 } from 'lucide-react'
 import { useSessionStore } from '@/store/sessionStore'
 import { getStorageMode } from '@/lib/storage/mode'
@@ -36,8 +37,9 @@ const links = [
 ]
 
 const systemLinks = [
-  { href: '/meta-sync',   label: 'Meta Sync',   icon: RefreshCw },
-  { href: '/dark-posts',  label: 'Dark Posts',  icon: EyeOff    },
+  { href: '/meta-sync',    label: 'Meta Sync',    icon: RefreshCw },
+  { href: '/dark-posts',   label: 'Dark Posts',   icon: EyeOff    },
+  { href: '/utmify-sync',  label: 'UTMify Sync',  icon: Plug      },
 ]
 
 const futureLinks = [

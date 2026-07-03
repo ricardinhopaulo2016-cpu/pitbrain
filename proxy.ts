@@ -3,7 +3,7 @@ import { updateSession } from '@/lib/supabase-middleware'
 
 const PROTECTED_PREFIXES = [
   '/dashboard', '/upload', '/imports', '/diagnostico', '/funil',
-  '/criativos', '/campanhas', '/meta-sync', '/dark-posts', '/configuracoes',
+  '/criativos', '/campanhas', '/meta-sync', '/dark-posts', '/utmify-sync', '/configuracoes',
   '/estrutura', '/rascunhos',
 ]
 

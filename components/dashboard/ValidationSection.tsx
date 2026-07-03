@@ -7,7 +7,7 @@ import { ShieldCheck } from 'lucide-react'
 interface Props {
   overall: FunnelMetrics
   summary: ImportSummary | null
-  sourceType: 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown' | 'meta_ads_structure' | null
+  sourceType: 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown' | 'meta_ads_structure' | 'utmify_mcp' | null
 }
 
 function fC(v: number): string {

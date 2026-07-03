@@ -1,6 +1,6 @@
 // Core PitBrain domain types — independent of any third-party API
 
-export type UtmifySourceType = 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown'
+export type UtmifySourceType = 'utmify_orders' | 'utmify_daily_aggregate' | 'utmify_utm_breakdown' | 'utmify_mcp'
 export type BreakdownLevel = 'campaign' | 'adset' | 'ad' | 'placement'
 
 export interface PitbrainImportSummary {

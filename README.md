@@ -29,6 +29,7 @@ Copie `.env.example` para `.env.local` e preencha com os valores reais:
 - `META_ACCESS_TOKEN`
 - `META_API_VERSION`
 - `META_DEFAULT_AD_ACCOUNT_ID`
+- `UTMIFY_MCP_URL` (opcional — habilita `/utmify-sync`; veja "UTMify MCP" abaixo)
 
 Além dessas, o projeto também usa variáveis de IA (OpenAI/Anthropic) e Supabase — veja `.env.example` para a lista completa.
 
@@ -104,6 +105,8 @@ PITBRAIN_ALLOWED_EMAILS=
 META_ACCESS_TOKEN=
 META_API_VERSION=v25.0
 META_DEFAULT_AD_ACCOUNT_ID=
+
+UTMIFY_MCP_URL=
 ```
 
 > ⚠️ **Avisos importantes**
@@ -112,6 +115,7 @@ META_DEFAULT_AD_ACCOUNT_ID=
 > - Nenhum e-mail ou senha fica hardcoded no código — o acesso é 100% controlado pela env `PITBRAIN_ALLOWED_EMAILS` + pelos usuários criados no Supabase Auth.
 > - Depois de alterar variáveis de ambiente na Vercel, é preciso fazer **Redeploy** — a Vercel não aplica novas envs em deploys já existentes.
 > - Se o token da Meta expirar, gere um novo (veja "Como renovar token?" em `/meta-sync`) e atualize `META_ACCESS_TOKEN` — local e na Vercel.
+> - `UTMIFY_MCP_URL` carrega o token de acesso embutido na própria URL — nunca commite o valor real nem logue a URL sem redigir o token (o cliente em `lib/utmify-mcp/utmify-mcp-client.ts` já faz isso automaticamente em todo log de dev).
 
 ## Renovar token da Meta
 
@@ -143,20 +147,23 @@ sem rodar sync) e um bloco "Como renovar token?" com duas opções:
 
 O Meta Sync foi desenhado para pedir o mínimo possível à Meta API:
 
-- **Structure Sync é o padrão** (botão "Sincronizar Estrutura") — busca campanhas, conjuntos,
-  anúncios, criativos e extrai Dark Posts. Chamadas seriais (nunca `Promise.all` agressivo), com
-  um delay configurável entre cada iteração (`META_SYNC_REQUEST_DELAY_MS`, default 1200ms) e um
-  timeout global de 90s.
+- **Dark Posts Fast é o padrão** (`includeAdsets: false`) — pula a etapa de conjuntos/adsets
+  inteira e busca anúncios direto por campanha, já que Dark Posts só precisa de anúncios +
+  criativos. O checkbox "Buscar conjuntos/adsets como enriquecimento" liga o modo **Structure
+  Full**, que inclui conjuntos (mais chamadas). Chamadas seriais (nunca `Promise.all` agressivo),
+  com um delay configurável entre cada iteração (`META_SYNC_REQUEST_DELAY_MS`, default 1200ms) e
+  um timeout global de 120s.
 - **Insights são separados** — seção própria "Insights de Performance", só habilitada depois de
   existir um Structure Sync concluído para a conta, com escopo pequeno por padrão (nível anúncio,
   últimos 7 dias, até 50 anúncios). Um rate limit em Insights nunca afeta o Structure Sync — são
   estados de erro independentes. Performance principal continua vindo da **UTMify**; Insights da
   Meta são complementares.
-- **Presets de escopo**: Seguro (ativas · 10 campanhas · 50 anúncios — default), Médio (ativas ·
-  25 · 100) e Completo (todas · 50 · 250 — pede confirmação antes de rodar, por ser mais pesado).
-  Um card de "plano estimado" mostra a estimativa de chamadas e avisos antes de sincronizar. O
-  botão "Sincronizar Insights" funciona como um quarto preset ("Insights") e também pede
-  confirmação explícita antes de rodar, já que faz chamadas extras separadas do Structure Sync.
+- **Presets de escopo**: Seguro (Dark Posts Fast · ativas · 10 campanhas · 50 anúncios — default),
+  Médio (Dark Posts Fast · ativas · 25 · 100) e Completo (Structure Full · todas · 50 · 250 · inclui
+  conjuntos — pede confirmação antes de rodar, por ser mais pesado). Um card de "plano estimado"
+  mostra a estimativa de chamadas e avisos antes de sincronizar. O botão "Sincronizar Insights"
+  funciona como um quarto preset ("Insights") e também pede confirmação explícita antes de rodar,
+  já que faz chamadas extras separadas do sync principal.
 - **Cache de criativos**: criativos já buscados ficam salvos em `pitbrain_meta_creative_cache`
   (workspace-scoped) e não são buscados de novo em syncs seguintes — só o que ainda não está em
   cache é buscado na Meta, em lotes pequenos. Use "Forçar refresh de criativos" para ignorar o
@@ -180,6 +187,32 @@ O Meta Sync foi desenhado para pedir o mínimo possível à Meta API:
 > `pitbrain_meta_creative_cache` — rode o `supabase/schema.sql` atualizado no SQL Editor (é
 > idempotente) antes de usar checkpoint/cache. Sem isso, o Meta Sync continua funcionando
 > normalmente, só sem persistir progresso parcial nem cachear criativos.
+
+## UTMify MCP (read-only)
+
+`/utmify-sync` conecta a um servidor remoto **MCP** (Model Context Protocol) da UTMify, lido de
+`UTMIFY_MCP_URL` — server-side only, nunca exposto ao browser. É um cliente novo, sem SDK externo
+(`lib/utmify-mcp/utmify-mcp-client.ts`, JSON-RPC 2.0 sobre HTTP, aceitando resposta JSON direta ou
+`text/event-stream`).
+
+- **Configurar**: adicione `UTMIFY_MCP_URL` (com o token já embutido na URL, do jeito que a UTMify
+  fornecer) nas Environment Variables da Vercel e faça **Redeploy**. Sem essa env, `/utmify-sync`
+  mostra "Configure UTMIFY_MCP_URL nas variáveis de ambiente" e o resto do app continua
+  funcionando normalmente.
+- **Nunca commite** a URL com o token real — nem em `.env.local`, nem em nenhum outro arquivo.
+  Todo log de dev já redige o token automaticamente
+  (`https://mcp.utmify.com.br/mcp/?token=***redacted***`).
+- **Somente leitura**: toda ferramenta (`tool`) que o servidor reporta é classificada antes de
+  poder ser chamada — nomes/descrições com `create|update|delete|remove|mutate|send|post|write`
+  são bloqueadas automaticamente (`POST /api/utmify-mcp/call` responde `403`), mesmo que a
+  ferramenta pareça inofensiva. Só ferramentas com `get|list|search|fetch|report|metrics|orders|
+  sales|campaigns|utms` no nome/descrição — e sem nenhuma palavra de escrita — são permitidas.
+- **Testar conexão**: botão em `/utmify-sync` chama `GET /api/utmify-mcp/status` (lista as
+  ferramentas disponíveis, não executa nenhuma).
+- **Import automático**: ainda não existe — `createImportFromUtmifyMcpResult()` em
+  `lib/utmify-mcp/utmify-mcp-service.ts` é um placeholder que prepara o formato
+  (`PitbrainImport` com `sourceType: 'utmify_mcp'`), reaproveitando os mesmos normalizadores
+  BR/Page Views/IC do upload CSV/XLSX — falta ligar isso à UI de fato.
 
 ## Stack
 
