@@ -1,5 +1,10 @@
 import { getUtmifyMcpClient } from './utmify-mcp-client'
-import { MissingUtmifyMcpUrlError, UtmifyMcpConnectionError, UtmifyMcpToolBlockedError } from './utmify-mcp-errors'
+import {
+  MissingUtmifyMcpUrlError,
+  UtmifyMcpConnectionError,
+  UtmifyMcpToolBlockedError,
+  describeUtmifyMcpError,
+} from './utmify-mcp-errors'
 import type { ClassifiedMcpTool, McpTool, McpToolCallResult, UtmifyMcpImportRequest } from './utmify-mcp-types'
 import type { PitbrainImport, PitbrainImportSummary } from '@/types/pitbrain'
 
@@ -55,25 +60,56 @@ export function classifyMcpTool(tool: McpTool): ClassifiedMcpTool {
 
 export interface UtmifyMcpStatus {
   ok: boolean
+  /** Step 1: is UTMIFY_MCP_URL set at all. */
   configured: boolean
+  /** Step 2: initialize + tools/list succeeded (transport/URL reachable). */
   connected: boolean
+  /** Step 3: a minimal get_dashboards call succeeded — only set once `connected` is true. This is
+   * the real end-to-end smoke test; `connected` alone just means the transport handshake worked. */
+  dashboardsOk?: boolean
   tools?: string[]
   error?: string
 }
 
-/** Lightweight status/connection check — used by GET /api/utmify-mcp/status and the "Testar conexão" button. Never throws; failures are folded into the returned status shape. */
+/**
+ * Staged status/connection check — used by GET /api/utmify-mcp/status and the "Testar conexão"
+ * button. Never throws; failures are folded into the returned status shape. Three steps, each only
+ * attempted if the previous one passed:
+ *   1. UTMIFY_MCP_URL configured at all.
+ *   2. initialize + tools/list reach the server (transport/URL/token accepted at the protocol level).
+ *   3. get_dashboards — the one tool we know is safe and minimal — actually returns something. This
+ *      is what catches a stale/regenerated UTMIFY_MCP_URL (UTMify's server answers tools/list fine
+ *      but rejects the actual call with MCP_INTEGRATION_NOT_FOUND). Never calls
+ *      get_dashboard_summary or get_meta_ad_objects here — those only make sense once a dashboard id
+ *      is known, which this status check has no way to get.
+ */
 export async function getMcpStatus(): Promise<UtmifyMcpStatus> {
   if (!process.env.UTMIFY_MCP_URL) {
     return { ok: true, configured: false, connected: false }
   }
 
+  let toolNames: string[]
   try {
     const client = getUtmifyMcpClient()
     const tools = await client.listTools()
-    return { ok: true, configured: true, connected: true, tools: tools.map(t => t.name) }
+    toolNames = tools.map(t => t.name)
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Erro ao conectar com o MCP UTMify.'
-    return { ok: false, configured: true, connected: false, error: message }
+    return { ok: false, configured: true, connected: false, error: describeUtmifyMcpError(err) }
+  }
+
+  try {
+    const client = getUtmifyMcpClient()
+    await client.callTool('get_dashboards', {})
+    return { ok: true, configured: true, connected: true, dashboardsOk: true, tools: toolNames }
+  } catch (err) {
+    return {
+      ok: false,
+      configured: true,
+      connected: true,
+      dashboardsOk: false,
+      tools: toolNames,
+      error: describeUtmifyMcpError(err),
+    }
   }
 }
 

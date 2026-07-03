@@ -10,7 +10,11 @@ import {
 import { cn } from '@/lib/utils'
 import type { ClassifiedMcpTool, ToolSafety } from '@/lib/utmify-mcp/utmify-mcp-types'
 
-type ConnectionState = 'checking' | 'not_configured' | 'connected' | 'error'
+// 'dashboards_failed': the transport/URL/token work at the protocol level (tools/list succeeded),
+// but the get_dashboards smoke test failed — most commonly MCP_INTEGRATION_NOT_FOUND from a stale
+// UTMIFY_MCP_URL. Distinct from 'error' (couldn't even reach/list tools) so the UI can point at the
+// right fix.
+type ConnectionState = 'checking' | 'not_configured' | 'connected' | 'dashboards_failed' | 'error'
 
 const SAFETY_BADGE: Record<ToolSafety, { label: string; className: string }> = {
   read_only: { label: 'LEITURA', className: 'text-pb-green bg-pb-green/10' },
@@ -86,6 +90,7 @@ function extractDashboardsBestEffort(result: unknown): { id: string; name: strin
 export default function UtmifySyncPage() {
   const [connection, setConnection] = useState<ConnectionState>('checking')
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [urlConfigured, setUrlConfigured] = useState<boolean | null>(null)
   const [testing, setTesting] = useState(false)
   const [tools, setTools] = useState<ClassifiedMcpTool[]>([])
   const [toolsError, setToolsError] = useState<string | null>(null)
@@ -107,6 +112,7 @@ export default function UtmifySyncPage() {
     try {
       const res = await fetch('/api/utmify-mcp/status')
       const json = await res.json()
+      setUrlConfigured(Boolean(json.configured))
       if (!json.configured) {
         setConnection('not_configured')
         return
@@ -116,8 +122,14 @@ export default function UtmifySyncPage() {
         setConnectionError(json.error ?? 'Erro ao conectar com o MCP UTMify.')
         return
       }
+      if (!json.dashboardsOk) {
+        setConnection('dashboards_failed')
+        setConnectionError(json.error ?? 'get_dashboards não respondeu como esperado.')
+        return
+      }
       setConnection('connected')
     } catch (err) {
+      setUrlConfigured(false)
       setConnection('error')
       setConnectionError(err instanceof Error ? err.message : 'Erro ao conectar com o MCP UTMify.')
     }
@@ -128,7 +140,7 @@ export default function UtmifySyncPage() {
   }, [checkStatus])
 
   useEffect(() => {
-    if (connection !== 'connected') return
+    if (connection !== 'connected' && connection !== 'dashboards_failed') return
     setToolsError(null)
     fetch('/api/utmify-mcp/tools')
       .then(res => res.json())
@@ -214,11 +226,13 @@ export default function UtmifySyncPage() {
         chips={[
           {
             label: connection === 'connected' ? 'Conectado'
+              : connection === 'dashboards_failed' ? 'Integração não reconhecida'
               : connection === 'not_configured' ? 'Não configurado'
               : connection === 'error' ? 'Erro de conexão'
               : 'Verificando',
             icon: connection === 'connected' ? Wifi : WifiOff,
           },
+          ...(urlConfigured !== null ? [{ label: `URL configurada: ${urlConfigured ? 'sim' : 'não'}` }] : []),
         ]}
       />
 
@@ -267,6 +281,16 @@ export default function UtmifySyncPage() {
         </div>
       )}
 
+      {connection === 'dashboards_failed' && (
+        <div className="flex items-start gap-3 rounded-xl px-4 py-4" style={{ background: 'rgba(250, 204, 21, 0.06)', border: '1px solid rgba(250, 204, 21, 0.25)' }}>
+          <AlertTriangle className="h-4 w-4 text-pb-yellow shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-pb-text">Conexão OK, mas get_dashboards falhou</p>
+            <p className="text-xs text-pb-muted mt-1">{connectionError}</p>
+          </div>
+        </div>
+      )}
+
       {connection === 'connected' && (
         <div className="flex items-center gap-2 rounded-xl px-4 py-4 bg-pb-card border border-pb-border">
           <CheckCircle2 className="h-4 w-4 text-pb-green shrink-0" />
@@ -274,7 +298,7 @@ export default function UtmifySyncPage() {
         </div>
       )}
 
-      {connection === 'connected' && (
+      {(connection === 'connected' || connection === 'dashboards_failed') && (
         <>
           {/* Fluxo sugerido */}
           <div className="bg-pb-card border border-pb-border rounded-xl overflow-hidden">

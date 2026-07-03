@@ -24,14 +24,24 @@ function redactUrl(rawUrl: string): string {
 }
 
 /**
- * Server-only client for a remote UTMify MCP (Model Context Protocol) server, reached over its
- * Streamable HTTP transport (JSON-RPC 2.0 POST requests; responses may come back as a single JSON
- * body or as a `text/event-stream`, both handled below). The URL (with its token embedded as a
- * query param) is read from process.env.UTMIFY_MCP_URL and never accepted from a caller — do not
- * add a constructor path that takes a URL from request input, and never log the raw URL.
+ * Server-only client for a remote UTMify MCP (Model Context Protocol) server. `this.url` is always
+ * `process.env.UTMIFY_MCP_URL` (or the exact override passed to the constructor) used byte-for-byte
+ * in every request — it is NEVER parsed apart and rebuilt from pieces (no hardcoded host/path/query
+ * template anywhere in this file). Whatever UTMify's "Copiar URL" button gives you — `/mcp`, `/sse`,
+ * a different host, a differently-named token param — is respected exactly. Never accept a token or
+ * URL from a caller/request body, and never log the raw URL (always through redactUrl()).
+ *
+ * Two transports are supported, chosen by the URL's own path (not guessed from response headers),
+ * since that's how UTMify's server itself tells you which one to use:
+ * - Default — MCP's Streamable HTTP transport: a single POST endpoint, JSON-RPC request in the
+ *   body, response comes back either as a plain JSON body or as one `text/event-stream` frame.
+ * - `/sse`-suffixed URLs — the older HTTP+SSE transport: GET the URL to open an SSE stream, read
+ *   the server's first `endpoint` event (where to POST), POST the JSON-RPC message there, then keep
+ *   reading the same SSE stream until the response with a matching `id` shows up.
  */
 export class UtmifyMcpClient {
   private readonly url: string
+  private readonly legacySse: boolean
   private sessionId: string | null = null
   private nextId = 1
   private initialized = false
@@ -43,6 +53,11 @@ export class UtmifyMcpClient {
     const resolved = url ?? process.env.UTMIFY_MCP_URL
     if (!resolved) throw new MissingUtmifyMcpUrlError()
     this.url = resolved
+    try {
+      this.legacySse = new URL(resolved).pathname.replace(/\/+$/, '').toLowerCase().endsWith('/sse')
+    } catch {
+      this.legacySse = false
+    }
   }
 
   private async rpcCall<T>(method: string, params?: Record<string, unknown>): Promise<T> {
@@ -65,6 +80,10 @@ export class UtmifyMcpClient {
   }
 
   private async send(body: JsonRpcRequest | JsonRpcNotification): Promise<JsonRpcResponse> {
+    return this.legacySse ? this.sendLegacySse(body) : this.sendStreamableHttp(body)
+  }
+
+  private async sendStreamableHttp(body: JsonRpcRequest | JsonRpcNotification): Promise<JsonRpcResponse> {
     if (process.env.NODE_ENV === 'development') {
       console.log('[pitbrain:utmify-mcp] POST', redactUrl(this.url), body.method)
     }
@@ -128,6 +147,103 @@ export class UtmifyMcpClient {
     if (matched) return matched
     if (frames.length > 0) return frames[frames.length - 1]
     throw new UtmifyMcpConnectionError('Resposta SSE do MCP UTMify vazia ou ilegível.')
+  }
+
+  /**
+   * Legacy MCP "HTTP with SSE" transport, used when `this.url`'s own path ends in `/sse`: GET the
+   * URL to open an SSE stream, read the server's first `endpoint` event (the URL to POST JSON-RPC
+   * messages to — usually the same origin as `this.url` plus a session id, so it's resolved against
+   * `this.url` rather than assumed), POST the message there, then keep reading the same open stream
+   * for a `message` event whose JSON-RPC `id` matches ours. Everything happens inside this one
+   * method call — no state is kept between separate calls, so each `rpcCall`/`rpcNotify` opens and
+   * tears down its own SSE connection. Less efficient than Streamable HTTP, but correct, and only
+   * used when the URL itself says to.
+   */
+  private async sendLegacySse(body: JsonRpcRequest | JsonRpcNotification): Promise<JsonRpcResponse> {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[pitbrain:utmify-mcp] SSE', redactUrl(this.url), body.method)
+    }
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
+    try {
+      const getRes = await fetch(this.url, {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream' },
+        signal: controller.signal,
+      })
+      if (!getRes.ok || !getRes.body) {
+        throw new UtmifyMcpConnectionError(`MCP UTMify (SSE) respondeu com status ${getRes.status} ao abrir o stream.`, getRes.status)
+      }
+
+      const reader = getRes.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      async function readNextEvent(): Promise<{ event: string; data: string } | null> {
+        while (true) {
+          const frameEnd = buffer.indexOf('\n\n')
+          if (frameEnd !== -1) {
+            const frame = buffer.slice(0, frameEnd)
+            buffer = buffer.slice(frameEnd + 2)
+            let event = 'message'
+            const dataLines: string[] = []
+            for (const line of frame.split('\n')) {
+              if (line.startsWith('event:')) event = line.slice(6).trim()
+              else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+            }
+            if (dataLines.length > 0) return { event, data: dataLines.join('\n') }
+            continue // frame with no data (e.g. a bare comment/ping) — keep reading
+          }
+          const { value, done } = await reader.read()
+          if (done) return null
+          buffer += decoder.decode(value, { stream: true })
+        }
+      }
+
+      try {
+        const endpointEvent = await readNextEvent()
+        if (!endpointEvent) {
+          throw new UtmifyMcpConnectionError('MCP UTMify (SSE) fechou o stream antes de enviar o endpoint de sessão.')
+        }
+        const endpointUrl = new URL(endpointEvent.data, this.url).toString()
+
+        const postRes = await fetch(endpointUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+        if (!postRes.ok) {
+          throw new UtmifyMcpConnectionError(`MCP UTMify (SSE) respondeu com status ${postRes.status} ao enviar a mensagem.`, postRes.status)
+        }
+
+        // A notification (no "id") has no response to wait for.
+        if (!('id' in body)) return { jsonrpc: '2.0', id: 0 }
+
+        while (true) {
+          const evt = await readNextEvent()
+          if (!evt) throw new UtmifyMcpConnectionError('MCP UTMify (SSE) fechou o stream antes de responder.')
+          try {
+            const parsed = JSON.parse(evt.data) as JsonRpcResponse
+            if (parsed.id === body.id) return parsed
+          } catch {
+            // not a JSON-RPC frame (e.g. a keep-alive comment) — keep reading
+          }
+        }
+      } finally {
+        reader.cancel().catch(() => {})
+      }
+    } catch (err) {
+      if (err instanceof UtmifyMcpConnectionError) throw err
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new UtmifyMcpConnectionError('Timeout ao chamar o MCP UTMify (SSE).', 408)
+      }
+      throw new UtmifyMcpConnectionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private async ensureInitialized(): Promise<void> {

@@ -34,6 +34,22 @@ export class UtmifyMcpToolBlockedError extends Error {
 
 export type UtmifyMcpErrorKind = 'missing_url' | 'connection_error' | 'tool_blocked' | 'internal'
 
+// UTMify's own MCP server returns this specific error when the token embedded in the URL doesn't
+// map to a live integration — almost always because the URL was copied a while ago and the
+// integration was since regenerated/revoked. This is a config/staleness issue, not a client bug —
+// the fix is re-copying a fresh URL, not anything this app can retry its way out of.
+const INTEGRATION_NOT_FOUND_PATTERN = /MCP_INTEGRATION_NOT_FOUND/i
+export const INTEGRATION_NOT_FOUND_MESSAGE =
+  'Token/integração não reconhecida pela UTMify. Copie novamente a URL pelo botão "Copiar URL" ' +
+  'na tela MCP da UTMify (IA Personalizada), atualize UTMIFY_MCP_URL na Vercel e faça Redeploy.'
+
+/** Turns a raw connection-error message into the specific friendly text when it's the known
+ * MCP_INTEGRATION_NOT_FOUND case, otherwise returns the message unchanged. */
+export function describeUtmifyMcpError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return INTEGRATION_NOT_FOUND_PATTERN.test(raw) ? INTEGRATION_NOT_FOUND_MESSAGE : raw
+}
+
 /** Shared error → HTTP response mapping for every app/api/utmify-mcp/* route — mirrors metaErrorResponse() in lib/meta/meta-errors.ts. */
 export function utmifyMcpErrorResponse(err: unknown, routeName: string): NextResponse {
   if (process.env.NODE_ENV === 'development') {
@@ -48,7 +64,7 @@ export function utmifyMcpErrorResponse(err: unknown, routeName: string): NextRes
   }
   if (err instanceof UtmifyMcpConnectionError) {
     return NextResponse.json(
-      { error: err.message, kind: 'connection_error' satisfies UtmifyMcpErrorKind },
+      { error: describeUtmifyMcpError(err), kind: 'connection_error' satisfies UtmifyMcpErrorKind },
       { status: err.status ?? 502 }
     )
   }
