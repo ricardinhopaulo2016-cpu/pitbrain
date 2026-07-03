@@ -52,13 +52,15 @@ export function isMetaRateLimitError(err: unknown): boolean {
   return RATE_LIMIT_MESSAGE_PATTERN.test(err.message)
 }
 
-function isMetaTokenError(err: unknown): boolean {
+/** Exported so callers (e.g. the per-campaign adsets loop) can propagate a dead/unauthorized token
+ * immediately instead of treating it as a per-item failure to skip past. */
+export function isMetaTokenError(err: unknown): boolean {
   if (!(err instanceof MetaAPIError)) return false
   if (err.code === OAUTH_ERROR_CODE) return true
   return TOKEN_EXPIRED_MESSAGE_PATTERN.test(err.message)
 }
 
-function isMetaPermissionError(err: unknown): boolean {
+export function isMetaPermissionError(err: unknown): boolean {
   if (!(err instanceof MetaAPIError)) return false
   if (err.code === PERMISSION_ERROR_CODE) return true
   return PERMISSION_MESSAGE_PATTERN.test(err.message)

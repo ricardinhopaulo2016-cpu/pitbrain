@@ -57,6 +57,7 @@ interface StreamEvent {
   message?: string
   actions?: string[]
   partial?: Partial<MetaSyncCounts>
+  currentItem?: { index: number; total: number; name: string }
 }
 
 export default function MetaSyncPage() {
@@ -68,6 +69,7 @@ export default function MetaSyncPage() {
   const [syncing, setSyncing] = useState(false)
   const [syncPhase, setSyncPhase] = useState<SyncPhase>('idle')
   const [syncCounts, setSyncCounts] = useState<MetaSyncCounts>(EMPTY_COUNTS)
+  const [currentItem, setCurrentItem] = useState<{ index: number; total: number; name: string } | null>(null)
   const [syncError, setSyncError] = useState<MetaSyncErrorInfo | null>(null)
   const [syncIncomplete, setSyncIncomplete] = useState(false)
   const [emptyReason, setEmptyReason] = useState<string | null>(null)
@@ -268,6 +270,7 @@ export default function MetaSyncPage() {
     setEmptyReason(null)
     setSyncPhase('campaigns')
     setSyncCounts(EMPTY_COUNTS)
+    setCurrentItem(null)
     setSyncWarnings([])
     setDebugEvents([])
     setSyncStartedAt(Date.now())
@@ -279,6 +282,9 @@ export default function MetaSyncPage() {
     const accountName = adAccounts.find(a => a.id === selectedAccountId)?.name
     const accumulated: MetaSyncCheckpointData = {}
     let liveCounts: Partial<MetaSyncCounts> = {}
+    // Local, not React state — `runSync` is one closure per click, so this reads the true current
+    // stage at cancel/error time instead of a stale value captured when the closure was created.
+    let currentStage: MetaSyncStage = 'campaigns'
 
     try {
       const res = await fetch('/api/meta/sync', {
@@ -324,7 +330,12 @@ export default function MetaSyncPage() {
           if (event.type === 'progress' && event.stage) {
             lastEventAtRef.current = Date.now()
             setStuckSeconds(0)
+            currentStage = event.stage
             setSyncPhase(event.stage)
+            if (event.currentItem) {
+              setCurrentItem(event.currentItem)
+              pushDebugEvent(`${STAGE_LABELS[event.stage] ?? event.stage} — campanha ${event.currentItem.index}/${event.currentItem.total}: ${event.currentItem.name}`)
+            }
             if (event.counts) {
               liveCounts = { ...liveCounts, ...event.counts }
               setSyncCounts(prev => ({ ...prev, ...event.counts }))
@@ -333,7 +344,10 @@ export default function MetaSyncPage() {
                 .join(', ')
               pushDebugEvent(`${STAGE_LABELS[event.stage] ?? event.stage}${countsSummary ? ` — ${countsSummary}` : ''}`)
             }
-            if (event.data) Object.assign(accumulated, event.data)
+            if (event.data) {
+              Object.assign(accumulated, event.data)
+              setCurrentItem(null)
+            }
           } else if (event.type === 'done') {
             finalResult = event.result
             pushDebugEvent('Sync finalizado')
@@ -380,7 +394,11 @@ export default function MetaSyncPage() {
       setSyncFinishedAt(Date.now())
       if (controller.signal.aborted) {
         if (cancelledRef.current) {
-          setSyncError({ kind: 'cancelled', title: 'Sync cancelado', message: 'Sync cancelado pelo usuário.' })
+          setSyncError({
+            kind: 'cancelled',
+            title: 'Sync cancelado',
+            message: `Sync cancelado pelo usuário durante ${STAGE_LABELS[currentStage].toLowerCase()}.`,
+          })
           setSyncPhase('cancelled')
           pushDebugEvent('Sync cancelado pelo usuário')
         } else {
@@ -414,6 +432,7 @@ export default function MetaSyncPage() {
       })
       setLastSync(getLastMetaSync(selectedAccountId))
     } finally {
+      setCurrentItem(null)
       clearTimeout(timeoutTimer)
       abortControllerRef.current = null
       setSyncing(false)
@@ -813,8 +832,12 @@ export default function MetaSyncPage() {
       {syncing && (
         <div className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.25)' }}>
           <Loader2 className="h-4 w-4 text-pb-purple shrink-0 animate-spin" />
-          <p className="text-sm text-pb-text">{STAGE_LABELS[syncPhase]}…</p>
-          <span className={cn('text-xs ml-auto', stuckSeconds > 20 ? 'text-pb-yellow font-medium' : 'text-pb-muted')}>
+          <p className="text-sm text-pb-text">
+            {STAGE_LABELS[syncPhase]}
+            {currentItem ? ` — campanha ${currentItem.index} de ${currentItem.total}` : ''}…
+            {currentItem && <span className="block text-xs text-pb-muted mt-0.5">Campanha atual: {currentItem.name}</span>}
+          </p>
+          <span className={cn('text-xs ml-auto shrink-0', stuckSeconds > 20 ? 'text-pb-yellow font-medium' : 'text-pb-muted')}>
             última atualização há {stuckSeconds}s
           </span>
         </div>
@@ -910,6 +933,9 @@ export default function MetaSyncPage() {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1">
                 <p><span className="text-pb-text font-medium">adAccountId:</span> {selectedAccountId || '—'}</p>
                 <p><span className="text-pb-text font-medium">Etapa:</span> {STAGE_LABELS[syncPhase]}</p>
+                {currentItem && (
+                  <p><span className="text-pb-text font-medium">Campanha atual:</span> {currentItem.index}/{currentItem.total} — {currentItem.name}</p>
+                )}
                 <p><span className="text-pb-text font-medium">Início:</span> {syncStartedAt ? new Date(syncStartedAt).toLocaleTimeString('pt-BR') : '—'}</p>
                 <p><span className="text-pb-text font-medium">Fim:</span> {syncFinishedAt ? new Date(syncFinishedAt).toLocaleTimeString('pt-BR') : '—'}</p>
                 <p>

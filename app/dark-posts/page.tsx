@@ -63,7 +63,7 @@ export default function DarkPostsPage() {
                   <TableRow key={post.adId} className="border-b border-pb-border last:border-0">
                     <TableCell className="text-pb-text text-sm">{productFunnel}</TableCell>
                     <TableCell className="text-pb-muted text-sm max-w-[160px] truncate">{post.campaignName}</TableCell>
-                    <TableCell className="text-pb-muted text-sm max-w-[140px] truncate">{post.adsetName}</TableCell>
+                    <TableCell className="text-pb-muted text-sm max-w-[140px] truncate">{post.adsetName || 'Conjunto não carregado'}</TableCell>
                     <TableCell className="text-pb-text text-sm max-w-[160px] truncate">{post.adName}</TableCell>
                     <TableCell className="text-pb-muted text-xs font-mono">{post.creativeId || '—'}</TableCell>
                     <TableCell className="text-pb-muted text-xs font-mono">{post.objectStoryId ?? post.effectiveObjectStoryId ?? '—'}</TableCell>

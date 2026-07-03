@@ -72,9 +72,9 @@ export async function upsertCreativeCache(workspaceId: string, creatives: MetaCr
  * isn't configured, or the caller asked to force a refresh.
  */
 export function createCachingCreativeFetcher(workspaceId: string | null, forceRefresh: boolean): CreativeFetcher {
-  return async function* cachingCreativeFetcher(creativeIds, signal, retryState) {
+  return async function* cachingCreativeFetcher(creativeIds, signal, retryState, onHeartbeat) {
     if (!workspaceId || forceRefresh || !isSupabaseConfigured() || creativeIds.length === 0) {
-      return yield* fetchCreativesSerial(creativeIds, signal, retryState)
+      return yield* fetchCreativesSerial(creativeIds, signal, retryState, onHeartbeat)
     }
 
     const unique = Array.from(new Set(creativeIds))
@@ -87,7 +87,7 @@ export function createCachingCreativeFetcher(workspaceId: string | null, forceRe
       return Array.from(cached.values())
     }
 
-    const gen = fetchCreativesSerial(missingIds, signal, retryState)
+    const gen = fetchCreativesSerial(missingIds, signal, retryState, onHeartbeat)
     let fetched: MetaCreative[] = []
     while (true) {
       const step = await gen.next()
