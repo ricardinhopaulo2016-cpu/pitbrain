@@ -55,21 +55,31 @@ export async function listAdAccounts(): Promise<MetaAdAccount[]> {
   return raw.map(normalizeAdAccount)
 }
 
-export async function getCampaigns(adAccountId: string, signal?: AbortSignal): Promise<MetaCampaign[]> {
+export async function getCampaigns(
+  adAccountId: string,
+  signal?: AbortSignal,
+  onHeartbeat?: () => void
+): Promise<MetaCampaign[]> {
   const client = getMetaClient()
   const raw = await client.paginate<MetaRawCampaign>(
     `/${adAccountId}/campaigns`,
     { fields: CAMPAIGN_FIELDS, limit: 100 },
-    20,
-    signal
+    10,
+    signal,
+    onHeartbeat
   )
   return raw.map(normalizeCampaign)
 }
 
-export async function getAdsets(adAccountId: string, campaignId?: string, signal?: AbortSignal): Promise<MetaAdset[]> {
+export async function getAdsets(
+  adAccountId: string,
+  campaignId?: string,
+  signal?: AbortSignal,
+  onHeartbeat?: () => void
+): Promise<MetaAdset[]> {
   const client = getMetaClient()
   const path = campaignId ? `/${campaignId}/adsets` : `/${adAccountId}/adsets`
-  const raw = await client.paginate<MetaRawAdset>(path, { fields: ADSET_FIELDS, limit: 100 }, 20, signal)
+  const raw = await client.paginate<MetaRawAdset>(path, { fields: ADSET_FIELDS, limit: 100 }, 10, signal, onHeartbeat)
   return raw.map(normalizeAdset)
 }
 
@@ -77,11 +87,12 @@ export async function getAds(
   adAccountId: string,
   campaignId?: string,
   adsetId?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onHeartbeat?: () => void
 ): Promise<MetaAd[]> {
   const client = getMetaClient()
   const path = adsetId ? `/${adsetId}/ads` : campaignId ? `/${campaignId}/ads` : `/${adAccountId}/ads`
-  const raw = await client.paginate<MetaRawAd>(path, { fields: AD_FIELDS, limit: 100 }, 20, signal)
+  const raw = await client.paginate<MetaRawAd>(path, { fields: AD_FIELDS, limit: 100 }, 10, signal, onHeartbeat)
   return raw.map(normalizeAd)
 }
 
@@ -242,6 +253,8 @@ export interface SyncMetaAccountResult extends MetaSyncResult {
   adsDecoded: MetaAdDecoded[]
   /** Set when the sync ended early because no campaign matched the filters — UI shows this instead of the normal summary. */
   emptyReason?: string
+  /** Contextual notes for expected-but-surprising-looking outcomes (e.g. ads found but no creatives) — not errors, just explanations so a real absence of data doesn't read as a bug. */
+  warnings?: string[]
 }
 
 // ── Safe sync scope ────────────────────────────────────────────────────────────
@@ -298,6 +311,10 @@ function isActive(entity: { effectiveStatus?: string; status: string }): boolean
 export interface RunMetaSyncDeps {
   /** Injected by app/api/meta/sync/route.ts to check/populate the Supabase creative cache; defaults to the pure, Supabase-free fetchCreativesSerial. */
   fetchCreatives?: CreativeFetcher
+  /** Called on every real Meta request attempt (including each page of a paginate() call) and at
+   * every stage-boundary yield — lets the caller's stall watchdog tell "still working" apart from
+   * "truly stuck," at a finer grain than the per-campaign/per-adset progress events alone give. */
+  onHeartbeat?: () => void
 }
 
 /**
@@ -330,7 +347,11 @@ export async function* runMetaSync(
   // ── Campaigns ──
   log('etapa: campanhas')
   checkAbort()
-  let campaigns = await withRateLimitBackoff(() => getCampaigns(adAccountId, signal), retryState, signal)
+  let campaigns = await withRateLimitBackoff(
+    () => getCampaigns(adAccountId, signal, deps.onHeartbeat),
+    retryState,
+    signal
+  )
   if (scope.status === 'active') campaigns = campaigns.filter(isActive)
   if (scope.nameContains?.trim()) {
     const needle = scope.nameContains.trim().toLowerCase()
@@ -363,11 +384,19 @@ export async function* runMetaSync(
 
   // ── Adsets (serial — one request per campaign, spaced by META_SYNC_REQUEST_DELAY_MS) ──
   log('etapa: conjuntos')
+  // Emitted immediately, before the first (possibly slow) getAdsets() call — otherwise the client
+  // shows nothing between the campaigns event and however long campaign[0]'s adsets fetch takes,
+  // which is exactly what made a slow/looping first fetch look like a stuck "Buscando campanhas."
+  yield { type: 'progress', stage: 'adsets', counts: { adsets: 0 } }
   const adsets: MetaAdset[] = []
   for (let i = 0; i < campaigns.length; i++) {
     checkAbort()
     const c = campaigns[i]
-    const batch = await withRateLimitBackoff(() => getAdsets(adAccountId, c.id, signal), retryState, signal)
+    const batch = await withRateLimitBackoff(
+      () => getAdsets(adAccountId, c.id, signal, deps.onHeartbeat),
+      retryState,
+      signal
+    )
     adsets.push(...(scope.status === 'active' ? batch.filter(isActive) : batch))
     counts.adsets = adsets.length
     yield { type: 'progress', stage: 'adsets', counts: { adsets: counts.adsets } }
@@ -378,12 +407,17 @@ export async function* runMetaSync(
 
   // ── Ads (serial — one request per adset, stop once adLimit is reached) ──
   log('etapa: anúncios')
+  yield { type: 'progress', stage: 'ads', counts: { ads: 0 } }
   const ads: MetaAd[] = []
   for (let i = 0; i < adsets.length; i++) {
     if (ads.length >= scope.adLimit) break
     checkAbort()
     const a = adsets[i]
-    const batch = await withRateLimitBackoff(() => getAds(adAccountId, undefined, a.id, signal), retryState, signal)
+    const batch = await withRateLimitBackoff(
+      () => getAds(adAccountId, undefined, a.id, signal, deps.onHeartbeat),
+      retryState,
+      signal
+    )
     ads.push(...(scope.status === 'active' ? batch.filter(isActive) : batch))
     counts.ads = Math.min(ads.length, scope.adLimit)
     yield { type: 'progress', stage: 'ads', counts: { ads: counts.ads } }
@@ -396,6 +430,7 @@ export async function* runMetaSync(
 
   // ── Creatives (cache-aware via deps.fetchCreatives, serial, small batches, delay between batches) ──
   log('etapa: criativos')
+  yield { type: 'progress', stage: 'creatives', counts: { creatives: 0 } }
   const creativeIds = limitedAds.map(a => a.creativeId).filter((id): id is string => Boolean(id))
   const fetchCreatives = deps.fetchCreatives ?? fetchCreativesSerial
   let creatives: MetaCreative[]
@@ -413,6 +448,7 @@ export async function* runMetaSync(
         creatives = step.value
         break
       }
+      deps.onHeartbeat?.()
       counts.creatives = step.value
       yield { type: 'progress', stage: 'creatives', counts: { creatives: counts.creatives } }
     }
@@ -442,6 +478,19 @@ export async function* runMetaSync(
   const adsetsDecoded: MetaAdsetDecoded[] = adsets.map(a => ({ ...a, decoded: parseAdSetName(a.name) }))
   const adsDecoded: MetaAdDecoded[] = limitedAds.map(a => ({ ...a, decoded: parseAdName(a.name) }))
 
+  // Contextual notes for outcomes that are surprising-looking but expected given the data — so an
+  // account that genuinely has no ads/creatives/dark posts in scope doesn't read as a bug.
+  const warnings: string[] = []
+  if (counts.campaigns > 0 && counts.ads === 0) {
+    warnings.push('Campanhas encontradas, mas nenhum anúncio foi retornado neste escopo.')
+  }
+  if (counts.ads > 0 && counts.creatives === 0) {
+    warnings.push('Anúncios encontrados, mas nenhum criativo foi carregado.')
+  }
+  if (counts.creatives > 0 && counts.darkPosts === 0) {
+    warnings.push('Criativos carregados, mas nenhum object_story_id/video_id/permalink foi detectado.')
+  }
+
   yield { type: 'progress', stage: 'done', counts: { ...counts } }
   log('sync finalizado', counts)
 
@@ -457,6 +506,7 @@ export async function* runMetaSync(
     adsetsDecoded,
     adsDecoded,
     counts,
+    warnings,
   }
 }
 

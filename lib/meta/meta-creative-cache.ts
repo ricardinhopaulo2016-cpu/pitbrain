@@ -2,6 +2,7 @@ import { getSupabaseAdminClient, isSupabaseConfigured } from '@/lib/supabase'
 import { fetchCreativesSerial } from './meta-service'
 import type { CreativeFetcher } from './meta-service'
 import type { MetaCreative } from './meta-types'
+import { CHECKPOINT_TIMEOUT_MS } from './meta-sync-constants'
 
 // Server-only, workspace-scoped cache for Meta creatives — avoids re-fetching the same creative
 // from the Graph API on every sync. Every function here is best-effort: a cache read/write
@@ -25,6 +26,7 @@ export async function getCachedCreatives(workspaceId: string, creativeIds: strin
     .select('creative_id, creative')
     .eq('workspace_id', workspaceId)
     .in('creative_id', creativeIds)
+    .abortSignal(AbortSignal.timeout(CHECKPOINT_TIMEOUT_MS))
 
   if (error) {
     if (process.env.NODE_ENV === 'development') console.error('[pitbrain:meta:creative-cache] read failed:', error.message)
@@ -52,7 +54,10 @@ export async function upsertCreativeCache(workspaceId: string, creatives: MetaCr
     permalink: c.instagramPermalinkUrl ?? null,
   }))
 
-  const { error } = await admin.from('pitbrain_meta_creative_cache').upsert(rows, { onConflict: 'workspace_id,creative_id' })
+  const { error } = await admin
+    .from('pitbrain_meta_creative_cache')
+    .upsert(rows, { onConflict: 'workspace_id,creative_id' })
+    .abortSignal(AbortSignal.timeout(CHECKPOINT_TIMEOUT_MS))
 
   if (error && process.env.NODE_ENV === 'development') {
     console.error('[pitbrain:meta:creative-cache] upsert failed:', error.message)

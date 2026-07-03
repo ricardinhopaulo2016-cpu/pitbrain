@@ -30,6 +30,9 @@ export class MetaClient {
   // Best-effort snapshot of Meta's own rate-limit usage headers from the most recent response —
   // debug-only, never read to decide whether to make a request.
   private lastUsage: Record<string, unknown> | null = null
+  // Best-effort diagnostics from the most recent paginate() call (e.g. "repeated next URL
+  // detected", "maxPages hit") — debug-only, cleared on read.
+  private lastWarnings: string[] = []
 
   constructor(options: MetaClientOptions = {}) {
     if (typeof window !== 'undefined') {
@@ -82,12 +85,24 @@ export class MetaClient {
     return this.lastUsage
   }
 
-  private async requestJson<T>(url: URL, externalSignal?: AbortSignal): Promise<T> {
+  /** Debug-only pagination warnings from the most recent paginate() call — cleared on read. */
+  getLastWarnings(): string[] {
+    const warnings = this.lastWarnings
+    this.lastWarnings = []
+    return warnings
+  }
+
+  private async requestJson<T>(url: URL, externalSignal?: AbortSignal, onRequest?: () => void): Promise<T> {
     await this.throttle()
 
     if (externalSignal?.aborted) {
       throw new MetaAPIError('Sync abortado antes da chamada à Meta API.', 499)
     }
+
+    // Fires once per real attempt (including every page of a paginate() call) — lets the sync
+    // route's stall watchdog know a request is actually in flight, distinct from the sync being
+    // stuck waiting on something that never touches the Meta API at all.
+    onRequest?.()
 
     if (process.env.NODE_ENV === 'development') {
       const redacted = new URL(url.toString())
@@ -137,32 +152,65 @@ export class MetaClient {
   async get<T = unknown>(
     path: string,
     params: Record<string, string | number | undefined> = {},
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onRequest?: () => void
   ): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`)
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
     }
     url.searchParams.set('access_token', this.accessToken)
-    return this.requestJson<T>(url, signal)
+    return this.requestJson<T>(url, signal, onRequest)
   }
 
-  /** GET all pages for a list endpoint, following `paging.next` until exhausted or maxPages is hit. */
+  /**
+   * GET all pages for a list endpoint, following `paging.next` until exhausted, maxPages is hit,
+   * or the same `paging.next` URL repeats (a real Graph API quirk where a "last" page still hands
+   * back a next link) — both of the latter two stop the loop and record a debug warning instead of
+   * looping/burning through the full maxPages budget silently.
+   */
   async paginate<T = unknown>(
     path: string,
     params: Record<string, string | number | undefined> = {},
-    maxPages = 20,
-    signal?: AbortSignal
+    maxPages = 10,
+    signal?: AbortSignal,
+    onRequest?: () => void
   ): Promise<T[]> {
+    const dev = process.env.NODE_ENV === 'development'
+    const visitedNextUrls = new Set<string>()
     const results: T[] = []
-    let page = await this.get<MetaListResponse<T>>(path, params, signal)
-    results.push(...(page.data ?? []))
 
+    let page = await this.get<MetaListResponse<T>>(path, params, signal, onRequest)
+    results.push(...(page.data ?? []))
     let pageCount = 1
+    if (dev) {
+      console.log(
+        `[pitbrain:meta-client] paginate ${path} page=${pageCount} items=${page.data?.length ?? 0} total=${results.length} hasNext=${Boolean(page.paging?.next)} nextUrlRepeated=false`
+      )
+    }
+
     while (page.paging?.next && pageCount < maxPages) {
-      page = await this.requestJson<MetaListResponse<T>>(new URL(page.paging.next), signal)
+      const nextUrl = page.paging.next
+      if (visitedNextUrls.has(nextUrl)) {
+        this.lastWarnings.push('Paginação repetida detectada.')
+        if (dev) console.log(`[pitbrain:meta-client] paginate ${path} — repeated next URL, stopping`)
+        break
+      }
+      visitedNextUrls.add(nextUrl)
+
+      page = await this.requestJson<MetaListResponse<T>>(new URL(nextUrl), signal, onRequest)
       results.push(...(page.data ?? []))
       pageCount++
+      if (dev) {
+        console.log(
+          `[pitbrain:meta-client] paginate ${path} page=${pageCount} items=${page.data?.length ?? 0} total=${results.length} hasNext=${Boolean(page.paging?.next)} nextUrlRepeated=false`
+        )
+      }
+    }
+
+    if (page.paging?.next && pageCount >= maxPages) {
+      this.lastWarnings.push('Limite de páginas atingido. Dados podem estar parciais.')
+      if (dev) console.log(`[pitbrain:meta-client] paginate ${path} — maxPages (${maxPages}) reached`)
     }
 
     return results

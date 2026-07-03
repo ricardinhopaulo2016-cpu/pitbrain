@@ -84,8 +84,31 @@ export default function MetaSyncPage() {
   const [insightsResult, setInsightsResult] = useState<MetaInsight[] | null>(null)
   const [showInsightsConfirm, setShowInsightsConfirm] = useState(false)
 
+  // Debug/diagnostics for the current or most recent sync run — purely client-side, not persisted.
+  const [syncWarnings, setSyncWarnings] = useState<string[]>([])
+  const [debugEvents, setDebugEvents] = useState<{ time: string; message: string }[]>([])
+  const [showDebugPanel, setShowDebugPanel] = useState(false)
+  const [syncStartedAt, setSyncStartedAt] = useState<number | null>(null)
+  const [syncFinishedAt, setSyncFinishedAt] = useState<number | null>(null)
+  const [stuckSeconds, setStuckSeconds] = useState(0)
+  const lastEventAtRef = useRef<number>(Date.now())
+
   const abortControllerRef = useRef<AbortController | null>(null)
   const cancelledRef = useRef(false)
+
+  function pushDebugEvent(message: string) {
+    setDebugEvents(prev => [...prev.slice(-9), { time: new Date().toLocaleTimeString('pt-BR'), message }])
+  }
+
+  // Ticks "há Xs desde a última atualização" while a sync is running — the same signal the
+  // server-side stall watchdog uses, shown to the user instead of just a silent spinner.
+  useEffect(() => {
+    if (!syncing) return
+    const interval = setInterval(() => {
+      setStuckSeconds(Math.floor((Date.now() - lastEventAtRef.current) / 1000))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [syncing])
 
   const loadAdAccounts = useCallback(async () => {
     setConnection('checking')
@@ -165,6 +188,8 @@ export default function MetaSyncPage() {
     setInsightsResult(null)
     setInsightsError(null)
     setShowInsightsConfirm(false)
+    setSyncWarnings([])
+    setDebugEvents([])
   }
 
   function handleClearSelection() {
@@ -176,6 +201,8 @@ export default function MetaSyncPage() {
     setSyncCounts(EMPTY_COUNTS)
     setEmptyReason(null)
     setShowInsightsConfirm(false)
+    setSyncWarnings([])
+    setDebugEvents([])
   }
 
   function applyPreset(id: MetaSyncPresetId) {
@@ -241,6 +268,13 @@ export default function MetaSyncPage() {
     setEmptyReason(null)
     setSyncPhase('campaigns')
     setSyncCounts(EMPTY_COUNTS)
+    setSyncWarnings([])
+    setDebugEvents([])
+    setSyncStartedAt(Date.now())
+    setSyncFinishedAt(null)
+    setStuckSeconds(0)
+    lastEventAtRef.current = Date.now()
+    pushDebugEvent('Validando token e iniciando sync')
 
     const accountName = adAccounts.find(a => a.id === selectedAccountId)?.name
     const accumulated: MetaSyncCheckpointData = {}
@@ -288,16 +322,24 @@ export default function MetaSyncPage() {
           if (!line.trim()) continue
           const event = JSON.parse(line) as StreamEvent
           if (event.type === 'progress' && event.stage) {
+            lastEventAtRef.current = Date.now()
+            setStuckSeconds(0)
             setSyncPhase(event.stage)
             if (event.counts) {
               liveCounts = { ...liveCounts, ...event.counts }
               setSyncCounts(prev => ({ ...prev, ...event.counts }))
+              const countsSummary = Object.entries(event.counts)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(', ')
+              pushDebugEvent(`${STAGE_LABELS[event.stage] ?? event.stage}${countsSummary ? ` — ${countsSummary}` : ''}`)
             }
             if (event.data) Object.assign(accumulated, event.data)
           } else if (event.type === 'done') {
             finalResult = event.result
+            pushDebugEvent('Sync finalizado')
           } else if (event.type === 'error') {
             streamError = event
+            pushDebugEvent(`Erro: ${event.title ?? event.kind ?? 'desconhecido'}`)
           }
         }
       }
@@ -311,6 +353,7 @@ export default function MetaSyncPage() {
         })
         setSyncPhase(streamError.kind === 'cancelled' ? 'cancelled' : 'error')
         setSyncIncomplete(true)
+        setSyncFinishedAt(Date.now())
         if (streamError.partial) setSyncCounts(prev => ({ ...prev, ...streamError.partial }))
         persistPartialMetaSyncResult({
           adAccountId: selectedAccountId,
@@ -327,15 +370,19 @@ export default function MetaSyncPage() {
 
       if (finalResult) {
         if (finalResult.emptyReason) setEmptyReason(finalResult.emptyReason)
+        if (finalResult.warnings) setSyncWarnings(finalResult.warnings)
         persistMetaSyncResult(finalResult)
         setLastSync(getLastMetaSync(selectedAccountId))
         setSyncPhase('done')
+        setSyncFinishedAt(Date.now())
       }
     } catch (err) {
+      setSyncFinishedAt(Date.now())
       if (controller.signal.aborted) {
         if (cancelledRef.current) {
           setSyncError({ kind: 'cancelled', title: 'Sync cancelado', message: 'Sync cancelado pelo usuário.' })
           setSyncPhase('cancelled')
+          pushDebugEvent('Sync cancelado pelo usuário')
         } else {
           setSyncError({
             kind: 'timeout',
@@ -344,6 +391,7 @@ export default function MetaSyncPage() {
             actions: ['Reduzir escopo', 'Usar último sync válido'],
           })
           setSyncPhase('error')
+          pushDebugEvent('Sync interrompido por timeout no cliente')
         }
       } else {
         setSyncError({
@@ -352,6 +400,7 @@ export default function MetaSyncPage() {
           message: err instanceof Error ? err.message : 'Erro ao sincronizar com a Meta API.',
         })
         setSyncPhase('error')
+        pushDebugEvent('Erro inesperado no cliente')
       }
       setSyncIncomplete(true)
       persistPartialMetaSyncResult({
@@ -765,6 +814,9 @@ export default function MetaSyncPage() {
         <div className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.25)' }}>
           <Loader2 className="h-4 w-4 text-pb-purple shrink-0 animate-spin" />
           <p className="text-sm text-pb-text">{STAGE_LABELS[syncPhase]}…</p>
+          <span className={cn('text-xs ml-auto', stuckSeconds > 20 ? 'text-pb-yellow font-medium' : 'text-pb-muted')}>
+            última atualização há {stuckSeconds}s
+          </span>
         </div>
       )}
 
@@ -801,6 +853,19 @@ export default function MetaSyncPage() {
         </div>
       )}
 
+      {/* Contextual notes for expected-but-surprising outcomes (e.g. ads found but no creatives) —
+          not errors, just explanations so a real absence of data doesn't read as a bug. */}
+      {syncWarnings.length > 0 && !syncing && (
+        <div className="rounded-xl px-4 py-3 space-y-1" style={{ background: 'rgba(148, 163, 184, 0.06)', border: '1px solid rgba(148, 163, 184, 0.2)' }}>
+          {syncWarnings.map(w => (
+            <p key={w} className="text-sm text-pb-text flex items-start gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 text-pb-muted shrink-0 mt-0.5" />
+              {w}
+            </p>
+          ))}
+        </div>
+      )}
+
       {/* Sync summary */}
       <div>
         {(() => {
@@ -826,6 +891,63 @@ export default function MetaSyncPage() {
           )
         })()}
       </div>
+
+      {/* Debug do último sync — collapsible, client-side only, same visual pattern as "Como renovar token?" */}
+      {(syncStartedAt || debugEvents.length > 0) && (
+        <div className="rounded-xl border border-pb-border overflow-hidden">
+          <button
+            onClick={() => setShowDebugPanel(v => !v)}
+            className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-pb-card hover:bg-pb-card-alt transition-colors"
+          >
+            <span className="flex items-center gap-2 text-sm text-pb-text font-medium">
+              <Gauge className="h-4 w-4 text-pb-purple" />
+              Debug do último sync
+            </span>
+            <ChevronDown className={cn('h-4 w-4 text-pb-muted transition-transform', showDebugPanel && 'rotate-180')} />
+          </button>
+          {showDebugPanel && (
+            <div className="px-4 py-4 space-y-3 text-xs text-pb-muted bg-pb-card-alt">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1">
+                <p><span className="text-pb-text font-medium">adAccountId:</span> {selectedAccountId || '—'}</p>
+                <p><span className="text-pb-text font-medium">Etapa:</span> {STAGE_LABELS[syncPhase]}</p>
+                <p><span className="text-pb-text font-medium">Início:</span> {syncStartedAt ? new Date(syncStartedAt).toLocaleTimeString('pt-BR') : '—'}</p>
+                <p><span className="text-pb-text font-medium">Fim:</span> {syncFinishedAt ? new Date(syncFinishedAt).toLocaleTimeString('pt-BR') : '—'}</p>
+                <p>
+                  <span className="text-pb-text font-medium">Duração:</span>{' '}
+                  {syncStartedAt ? `${Math.round(((syncFinishedAt ?? Date.now()) - syncStartedAt) / 1000)}s` : '—'}
+                </p>
+                <p><span className="text-pb-text font-medium">Status:</span> {syncing ? 'em andamento' : syncError ? 'erro' : 'concluído'}</p>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-x-4 gap-y-1">
+                <p><span className="text-pb-text font-medium">Campanhas:</span> {syncCounts.campaigns}</p>
+                <p><span className="text-pb-text font-medium">Conjuntos:</span> {syncCounts.adsets}</p>
+                <p><span className="text-pb-text font-medium">Anúncios:</span> {syncCounts.ads}</p>
+                <p><span className="text-pb-text font-medium">Criativos:</span> {syncCounts.creatives}</p>
+                <p><span className="text-pb-text font-medium">Dark Posts:</span> {syncCounts.darkPosts}</p>
+              </div>
+              {syncError && <p><span className="text-pb-text font-medium">Erro:</span> {syncError.message}</p>}
+              {syncWarnings.length > 0 && (
+                <div>
+                  <p className="text-pb-text font-medium mb-1">Avisos:</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {syncWarnings.map(w => <li key={w}>{w}</li>)}
+                  </ul>
+                </div>
+              )}
+              {debugEvents.length > 0 && (
+                <div>
+                  <p className="text-pb-text font-medium mb-1">Últimos eventos:</p>
+                  <ul className="space-y-0.5 font-mono">
+                    {debugEvents.map((e, i) => (
+                      <li key={i}>{e.time} — {e.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Insights de Performance — fully separate flow, own state, own errors ── */}
       <div className="rounded-xl border border-pb-border overflow-hidden">

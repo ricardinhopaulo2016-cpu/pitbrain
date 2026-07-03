@@ -30,7 +30,7 @@ export class MetaWriteDisabledError extends Error {
 
 /** Thrown internally to unwind a sync in progress — caught by the route handler, never surfaced by its message. */
 export class SyncAbortedError extends Error {
-  constructor(reason: 'timeout' | 'cancelled') {
+  constructor(reason: 'timeout' | 'cancelled' | 'stalled') {
     super(`Sync aborted: ${reason}`)
     this.name = 'SyncAbortedError'
   }
@@ -86,6 +86,7 @@ export type MetaErrorKind =
   | 'internal'
   | 'rate_limit'
   | 'timeout'
+  | 'stalled'
   | 'cancelled'
   | 'token'
   | 'permission_error'
@@ -98,9 +99,21 @@ export interface MetaSyncErrorInfo {
 }
 
 /** Friendly PT-BR title/message/actions for the sync error card — shared between the stream route and any future non-streaming caller. */
-export function buildMetaSyncErrorInfo(err: unknown, abortReason?: 'timeout' | 'cancelled'): MetaSyncErrorInfo {
+export function buildMetaSyncErrorInfo(
+  err: unknown,
+  abortReason?: 'timeout' | 'cancelled' | 'stalled',
+  stalledStage?: string
+): MetaSyncErrorInfo {
   if (abortReason === 'cancelled') {
     return { kind: 'cancelled', title: 'Sync cancelado', message: 'Sync cancelado pelo usuário.' }
+  }
+  if (abortReason === 'stalled') {
+    return {
+      kind: 'stalled',
+      title: 'Sync interrompido por falta de progresso',
+      message: `Sync interrompido: a etapa ${stalledStage ?? 'atual'} ficou sem progresso.`,
+      actions: ['Reduzir escopo', 'Tentar novamente depois', 'Usar último sync válido'],
+    }
   }
   if (abortReason === 'timeout') {
     return {
