@@ -68,7 +68,7 @@ export class UtmifyMcpClient {
       throw new UtmifyMcpConnectionError(`Resposta do MCP UTMify sem id para o método ${method}.`)
     }
     if (json.error) {
-      throw new UtmifyMcpConnectionError(`MCP UTMify (${method}): ${json.error.message}`, 502)
+      throw new UtmifyMcpConnectionError(`MCP UTMify (${method}): ${json.error.message}`, 502, json.error.code, json.error.data)
     }
     return json.result as T
   }

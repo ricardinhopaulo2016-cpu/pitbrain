@@ -7,7 +7,7 @@ import { getCurrentUser } from '@/lib/auth/get-current-user'
 import {
   ArrowRight,
   Zap,
-  Upload,
+  Plug,
   BarChart2,
   Brain,
   RefreshCw,
@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 
 const featureList = [
-  { icon: Upload,    label: 'Upload UTMify'                      },
+  { icon: Plug,      label: 'Conecte a UTMify via MCP'           },
   { icon: BarChart2, label: 'Métricas calculadas, sem achismos'  },
   { icon: RefreshCw, label: 'Meta Sync read-only'                },
   { icon: Brain,     label: 'Diagnóstico local'                  },
@@ -26,10 +26,11 @@ const featureList = [
 ]
 
 const steps = [
-  { n: '01', label: 'Faça upload dos CSVs',        href: '/upload',      color: '#38BDF8' },
-  { n: '02', label: 'Veja o dashboard de métricas', href: '/dashboard',   color: '#7C3AED' },
-  { n: '03', label: 'Gere o diagnóstico IA',        href: '/diagnostico', color: '#22C55E' },
-  { n: '04', label: 'Revise os rascunhos',          href: '/rascunhos',   color: '#FACC15' },
+  { n: '01', label: 'Conecte UTMify MCP',           href: '/utmify-sync', color: '#38BDF8' },
+  { n: '02', label: 'Escolha dashboard e período',  href: '/utmify-sync', color: '#38BDF8' },
+  { n: '03', label: 'Puxe os dados',                href: '/utmify-sync', color: '#38BDF8' },
+  { n: '04', label: 'Salve o import no Pitbrain',   href: '/utmify-sync', color: '#7C3AED' },
+  { n: '05', label: 'Analise Dashboard/Funil/Criativos', href: '/dashboard', color: '#22C55E' },
 ]
 
 export default async function HomePage() {
@@ -107,7 +108,7 @@ export default async function HomePage() {
               ) : (
                 <>
                   <Link
-                    href="/upload"
+                    href="/utmify-sync"
                     className="inline-flex items-center gap-2 text-white font-bold px-5 py-2.5 rounded-xl text-sm transition-all hover:opacity-90 active:scale-[0.98]"
                     style={{
                       background: 'linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)',
@@ -230,7 +231,7 @@ export default async function HomePage() {
           <p className="text-[10px] uppercase tracking-[0.2em] text-pb-border font-semibold mb-6">
             Fluxo operacional
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {steps.map((s, i) => (
               <Link key={s.n} href={s.href} className="group">
                 <div

@@ -6,7 +6,6 @@ import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
   BarChart2,
-  Upload,
   Brain,
   GitFork,
   Megaphone,
@@ -27,7 +26,6 @@ import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 
 const links = [
   { href: '/dashboard',    label: 'Dashboard',        icon: BarChart2  },
-  { href: '/upload',       label: 'Upload UTMify',    icon: Upload     },
   { href: '/imports',      label: 'Imports Salvos',   icon: Database   },
   { href: '/diagnostico',  label: 'Diagnóstico Local', icon: Brain     },
   { href: '/funil',        label: 'Funil',             icon: GitFork    },

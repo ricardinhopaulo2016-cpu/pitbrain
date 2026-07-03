@@ -5,7 +5,7 @@ import { PageShell } from '@/components/layout/PageShell'
 import { useActiveImport } from '@/hooks/useActiveImport'
 import { UtmRankingTable } from '@/components/dashboard/UtmRankingTable'
 import type { UtmifyBreakdownRow } from '@/types/utmify'
-import { Megaphone, Upload } from 'lucide-react'
+import { Megaphone, Database } from 'lucide-react'
 
 export default function CampanhasPage() {
   const activeImport = useActiveImport()
@@ -22,7 +22,7 @@ export default function CampanhasPage() {
           <p className="text-pb-muted text-sm">Selecione um import na página Imports Salvos.</p>
         </div>
         <button onClick={() => router.push('/imports')} className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all">
-          <Upload className="h-4 w-4" />
+          <Database className="h-4 w-4" />
           Imports Salvos
         </button>
       </PageShell>
@@ -30,6 +30,7 @@ export default function CampanhasPage() {
   }
 
   if (activeImport.breakdownLevel !== 'campaign') {
+    const isSummaryOnlyMcp = activeImport.sourceType === 'utmify_mcp'
     return (
       <PageShell className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <div className="w-16 h-16 rounded-2xl bg-pb-card-alt border border-pb-border flex items-center justify-center">
@@ -37,10 +38,16 @@ export default function CampanhasPage() {
         </div>
         <div className="text-center max-w-md">
           <p className="text-pb-text font-medium mb-1">Dados de campanha indisponíveis</p>
-          <p className="text-pb-muted text-sm leading-relaxed">
-            Para visualizar campanhas, carregue um import UTMify com{' '}
-            <span className="text-pb-text font-medium">UTM_CAMPAIGN</span> (Quebra por UTM — nível Campanha).
-          </p>
+          {isSummaryOnlyMcp ? (
+            <p className="text-pb-muted text-sm leading-relaxed">
+              Este import não possui breakdown. Puxe objetos de anúncios via UTMify Sync para ranking.
+            </p>
+          ) : (
+            <p className="text-pb-muted text-sm leading-relaxed">
+              Para visualizar campanhas, carregue um import UTMify com{' '}
+              <span className="text-pb-text font-medium">UTM_CAMPAIGN</span> (Quebra por UTM — nível Campanha).
+            </p>
+          )}
           <p className="text-xs text-pb-muted mt-2">
             Import atual: <span className="text-pb-text">{activeImport.name}</span>
             {activeImport.breakdownLevel
@@ -49,10 +56,10 @@ export default function CampanhasPage() {
           </p>
         </div>
         <button
-          onClick={() => router.push('/imports')}
+          onClick={() => router.push(isSummaryOnlyMcp ? '/utmify-sync' : '/imports')}
           className="inline-flex items-center gap-2 border border-pb-border text-pb-muted hover:text-pb-text px-5 py-2.5 rounded-xl text-sm transition-all"
         >
-          Trocar import
+          {isSummaryOnlyMcp ? 'Ir para UTMify Sync' : 'Trocar import'}
         </button>
       </PageShell>
     )

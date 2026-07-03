@@ -72,7 +72,7 @@ function buildRow(
 export function ValidationSection({ overall, summary, sourceType }: Props) {
   const { spend, revenue, purchases, clicks, impressions, pageViews, initiateCheckouts } = overall
 
-  const isDailyAggregate = sourceType === 'utmify_daily_aggregate' || sourceType === 'utmify_utm_breakdown'
+  const isDailyAggregate = sourceType === 'utmify_daily_aggregate' || sourceType === 'utmify_utm_breakdown' || sourceType === 'utmify_mcp'
   const profit: number | null = isDailyAggregate ? (summary?.profit ?? null) : null
 
   const totals = [

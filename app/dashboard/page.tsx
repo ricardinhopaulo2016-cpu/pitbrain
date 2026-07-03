@@ -123,12 +123,12 @@ export default function DashboardPage() {
               Imports Salvos
             </button>
             <button
-              onClick={() => router.push('/upload')}
+              onClick={() => router.push('/utmify-sync')}
               className="inline-flex items-center gap-2 border border-pb-border text-pb-muted hover:text-pb-text font-medium px-5 py-2.5 rounded-xl text-sm transition-all"
               style={{ background: '#10101D' }}
             >
               <Upload className="h-4 w-4" />
-              Novo Upload
+              Conectar UTMify MCP
             </button>
           </div>
         </div>
@@ -177,10 +177,12 @@ export default function DashboardPage() {
   }
 
   const isBreakdown = activeImport.sourceType === 'utmify_utm_breakdown'
+    || (activeImport.sourceType === 'utmify_mcp' && !!activeImport.breakdownLevel)
 
   const sourceLabel =
     activeImport.sourceType === 'utmify_daily_aggregate'  ? 'UTMify · Agregado Diário' :
     activeImport.sourceType === 'utmify_utm_breakdown'    ? `UTMify · ${activeImport.dimensionLabel ?? 'UTM Breakdown'}` :
+    activeImport.sourceType === 'utmify_mcp'              ? 'Fonte: UTMify MCP' :
     'UTMify'
 
   const periodLabel = activeImport.periodLabel

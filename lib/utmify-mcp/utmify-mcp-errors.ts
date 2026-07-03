@@ -12,11 +12,17 @@ export class MissingUtmifyMcpUrlError extends Error {
  * JSON-RPC envelope, or a JSON-RPC-level error object. */
 export class UtmifyMcpConnectionError extends Error {
   readonly status?: number
+  /** JSON-RPC error code, when this wraps a JSON-RPC-level error object (e.g. -32602 = Invalid params). */
+  readonly rpcCode?: number
+  /** JSON-RPC error `data` field, when present — often carries structured detail about what was invalid. */
+  readonly rpcData?: unknown
 
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, rpcCode?: number, rpcData?: unknown) {
     super(message)
     this.name = 'UtmifyMcpConnectionError'
     this.status = status
+    this.rpcCode = rpcCode
+    this.rpcData = rpcData
   }
 }
 
@@ -43,11 +49,21 @@ export const INTEGRATION_NOT_FOUND_MESSAGE =
   'Token/integração não reconhecida pela UTMify. Copie novamente a URL pelo botão "Copiar URL" ' +
   'na tela MCP da UTMify (IA Personalizada), atualize UTMIFY_MCP_URL na Vercel e faça Redeploy.'
 
-/** Turns a raw connection-error message into the specific friendly text when it's the known
- * MCP_INTEGRATION_NOT_FOUND case, otherwise returns the message unchanged. */
+// JSON-RPC 2.0 reserves -32602 for "Invalid params" — the standard way an MCP server rejects a
+// tool call with a missing/malformed argument. Some servers also just say "invalid" in the message
+// without using the standard code, so both are checked.
+const INVALID_PARAMS_CODE = -32602
+const INVALID_PARAMS_PATTERN = /invalid.?param/i
+export const INVALID_PARAMS_MESSAGE = 'Parâmetros inválidos para esta ferramenta.'
+
+/** Turns a raw connection-error message into the specific friendly text when it's a known case
+ * (MCP_INTEGRATION_NOT_FOUND, invalid params), otherwise returns the message unchanged. */
 export function describeUtmifyMcpError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err)
-  return INTEGRATION_NOT_FOUND_PATTERN.test(raw) ? INTEGRATION_NOT_FOUND_MESSAGE : raw
+  if (INTEGRATION_NOT_FOUND_PATTERN.test(raw)) return INTEGRATION_NOT_FOUND_MESSAGE
+  if (err instanceof UtmifyMcpConnectionError && err.rpcCode === INVALID_PARAMS_CODE) return INVALID_PARAMS_MESSAGE
+  if (INVALID_PARAMS_PATTERN.test(raw)) return INVALID_PARAMS_MESSAGE
+  return raw
 }
 
 /** Shared error → HTTP response mapping for every app/api/utmify-mcp/* route — mirrors metaErrorResponse() in lib/meta/meta-errors.ts. */
@@ -64,7 +80,11 @@ export function utmifyMcpErrorResponse(err: unknown, routeName: string): NextRes
   }
   if (err instanceof UtmifyMcpConnectionError) {
     return NextResponse.json(
-      { error: describeUtmifyMcpError(err), kind: 'connection_error' satisfies UtmifyMcpErrorKind },
+      {
+        error: describeUtmifyMcpError(err),
+        kind: 'connection_error' satisfies UtmifyMcpErrorKind,
+        ...(err.rpcData !== undefined ? { detail: err.rpcData } : {}),
+      },
       { status: err.status ?? 502 }
     )
   }

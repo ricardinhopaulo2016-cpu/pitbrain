@@ -517,6 +517,27 @@ export function buildSummaryMetrics(lastImport: LastImport): SummaryMetrics {
     }
   }
 
+  if (lastImport.sourceType === 'utmify_mcp') {
+    // Normalized at ingestion time (lib/utmify-mcp/utmify-mcp-normalizers.ts) into rows shaped
+    // exactly like UtmifyBreakdownRow (campaign/adset/ad breakdown pulls) or UtmifyDailyRow
+    // (summary-only pulls, as one synthetic row) — reuses the same reducers as their file-upload
+    // counterparts unchanged, just routed here based on whether a breakdown was requested.
+    if (lastImport.breakdownLevel) {
+      const rows = lastImport.rows as UtmifyBreakdownRow[]
+      const overall = buildFunnelFromBreakdown(rows)
+      return { overall, byCampaign: [], dateRange: { from: '', to: '' }, sessionId }
+    }
+    const rows = lastImport.rows as UtmifyDailyRow[]
+    const overall = buildFunnelFromDaily(rows)
+    const dates = rows.map(r => r.date).filter((d): d is string => !!d).sort()
+    return {
+      overall,
+      byCampaign: [],
+      dateRange: { from: dates[0] ?? '', to: dates[dates.length - 1] ?? '' },
+      sessionId,
+    }
+  }
+
   const rows = lastImport.rows as UtmifySession[]
   const overall = buildFunnelFromOrders(rows)
   const dates = rows.map(r => r.orderDate).filter((d): d is string => !!d).sort()

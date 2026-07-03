@@ -209,10 +209,15 @@ O Meta Sync foi desenhado para pedir o mínimo possível à Meta API:
   sales|campaigns|utms` no nome/descrição — e sem nenhuma palavra de escrita — são permitidas.
 - **Testar conexão**: botão em `/utmify-sync` chama `GET /api/utmify-mcp/status` (lista as
   ferramentas disponíveis, não executa nenhuma).
-- **Import automático**: ainda não existe — `createImportFromUtmifyMcpResult()` em
-  `lib/utmify-mcp/utmify-mcp-service.ts` é um placeholder que prepara o formato
-  (`PitbrainImport` com `sourceType: 'utmify_mcp'`), reaproveitando os mesmos normalizadores
-  BR/Page Views/IC do upload CSV/XLSX — falta ligar isso à UI de fato.
+- **Fonte oficial de dados**: `/utmify-sync` é a tela principal de importação — dashboard → período
+  → tipo de relatório (Resumo geral/Meta/Google/Kwai/TikTok) → nível (All/Account/Campaign/Adset/
+  Ad) → preview → "Salvar import no Pitbrain". `lib/utmify-mcp/utmify-mcp-import.ts`'s
+  `createPitbrainImportFromUtmifyMcp()` monta um `PitbrainImport` real (`sourceType: 'utmify_mcp'`)
+  a partir dos normalizadores em `lib/utmify-mcp/utmify-mcp-normalizers.ts`, salva pelo mesmo
+  caminho (`lib/storage/pitbrain-storage.ts`) que o upload CSV/XLSX já usava. **O fluxo oficial é
+  UTMify MCP — upload XLSX/CSV foi descontinuado como fluxo principal e será removido na limpeza
+  técnica futura** (o parser continua no repositório como código legado, só não faz mais parte da
+  navegação).
 
 ## Stack
 

@@ -19,7 +19,7 @@ import { useSessionStore } from '@/store/sessionStore'
 import type { PitbrainImport } from '@/types/pitbrain'
 import {
   Database, Trash2, Edit3, BarChart2, CheckCircle2,
-  Upload, Calendar, Layers, AlertCircle, X, AlertTriangle, CloudUpload, Loader2,
+  Plug, Calendar, Layers, AlertCircle, X, AlertTriangle, CloudUpload, Loader2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -41,6 +41,7 @@ function fmtDate(iso: string) {
 }
 
 function sourceLabel(imp: PitbrainImport) {
+  if (imp.sourceType === 'utmify_mcp') return 'UTMify MCP'
   if (imp.sourceType === 'utmify_utm_breakdown') {
     return `UTM Breakdown · ${imp.dimensionLabel ?? imp.dimensionField ?? ''}`
   }
@@ -143,6 +144,11 @@ function ImportCard({
                   <Database className="h-2.5 w-2.5" />
                   {sourceLabel(imp)}
                 </span>
+                {imp.sourceType !== 'utmify_mcp' && (
+                  <span className="text-[9px] font-semibold uppercase tracking-wide text-pb-yellow bg-pb-yellow/10 px-1.5 py-0.5 rounded">
+                    Legado — arquivo
+                  </span>
+                )}
                 {imp.periodLabel && (
                   <span className="text-[10px] text-pb-muted flex items-center gap-1">
                     <Calendar className="h-2.5 w-2.5" />
@@ -227,10 +233,10 @@ function ImportCard({
                 </p>
               </div>
               <button
-                onClick={() => router.push('/upload')}
+                onClick={() => router.push('/utmify-sync')}
                 className="shrink-0 text-[11px] font-semibold text-pb-yellow hover:text-pb-yellow/80 transition-colors"
               >
-                Reimportar
+                Reimportar via UTMify Sync
               </button>
             </div>
           )}
@@ -348,10 +354,10 @@ export default function ImportsPage() {
             </button>
           )}
           <button
-            onClick={() => router.push('/upload')}
+            onClick={() => router.push('/utmify-sync')}
             className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 text-white font-medium px-4 py-2 rounded-xl text-sm transition-all"
           >
-            <Upload className="h-4 w-4" />
+            <Plug className="h-4 w-4" />
             Novo import
           </button>
         </div>
@@ -417,15 +423,15 @@ export default function ImportsPage() {
           <div>
             <p className="text-pb-text font-medium mb-1">Nenhum import salvo</p>
             <p className="text-pb-muted text-sm max-w-xs leading-relaxed">
-              Faça o upload de um relatório UTMify para começar.
+              Conecte a UTMify via MCP para começar.
             </p>
           </div>
           <button
-            onClick={() => router.push('/upload')}
+            onClick={() => router.push('/utmify-sync')}
             className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all"
           >
-            <Upload className="h-4 w-4" />
-            Ir para Upload
+            <Plug className="h-4 w-4" />
+            Conectar UTMify MCP
           </button>
         </div>
       )}

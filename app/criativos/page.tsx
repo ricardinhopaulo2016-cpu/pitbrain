@@ -5,7 +5,7 @@ import { PageShell } from '@/components/layout/PageShell'
 import { useActiveImport } from '@/hooks/useActiveImport'
 import { UtmRankingTable } from '@/components/dashboard/UtmRankingTable'
 import type { UtmifyBreakdownRow } from '@/types/utmify'
-import { Sparkles, Upload, BarChart2, Info } from 'lucide-react'
+import { Sparkles, Database, BarChart2, Info } from 'lucide-react'
 
 function EmptyState({ message, sub, onUpload }: { message: string; sub: string; onUpload: () => void }) {
   return (
@@ -21,8 +21,8 @@ function EmptyState({ message, sub, onUpload }: { message: string; sub: string; 
         onClick={onUpload}
         className="inline-flex items-center gap-2 bg-pb-purple hover:bg-pb-purple/90 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all"
       >
-        <Upload className="h-4 w-4" />
-        Ir para Upload
+        <Database className="h-4 w-4" />
+        Ver Imports Salvos
       </button>
     </PageShell>
   )
@@ -43,6 +43,7 @@ export default function CriativosPage() {
   }
 
   if (activeImport.breakdownLevel !== 'ad') {
+    const isSummaryOnlyMcp = activeImport.sourceType === 'utmify_mcp'
     return (
       <PageShell className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <div className="w-16 h-16 rounded-2xl bg-pb-card-alt border border-pb-border flex items-center justify-center">
@@ -50,10 +51,16 @@ export default function CriativosPage() {
         </div>
         <div className="text-center max-w-md">
           <p className="text-pb-text font-medium mb-1">Dados de criativos indisponíveis</p>
-          <p className="text-pb-muted text-sm leading-relaxed">
-            Para visualizar criativos, carregue um import UTMify com{' '}
-            <span className="text-pb-text font-medium">UTM_CONTENT</span> (Quebra por UTM — nível Anúncio).
-          </p>
+          {isSummaryOnlyMcp ? (
+            <p className="text-pb-muted text-sm leading-relaxed">
+              Este import não possui breakdown. Puxe objetos de anúncios via UTMify Sync para ranking.
+            </p>
+          ) : (
+            <p className="text-pb-muted text-sm leading-relaxed">
+              Para visualizar criativos, carregue um import UTMify com{' '}
+              <span className="text-pb-text font-medium">UTM_CONTENT</span> (Quebra por UTM — nível Anúncio).
+            </p>
+          )}
           <p className="text-xs text-pb-muted mt-2">
             Import atual: <span className="text-pb-text">{activeImport.name}</span>
             {activeImport.breakdownLevel
@@ -62,10 +69,10 @@ export default function CriativosPage() {
           </p>
         </div>
         <button
-          onClick={() => router.push('/imports')}
+          onClick={() => router.push(isSummaryOnlyMcp ? '/utmify-sync' : '/imports')}
           className="inline-flex items-center gap-2 border border-pb-border text-pb-muted hover:text-pb-text px-5 py-2.5 rounded-xl text-sm transition-all"
         >
-          Trocar import
+          {isSummaryOnlyMcp ? 'Ir para UTMify Sync' : 'Trocar import'}
         </button>
       </PageShell>
     )

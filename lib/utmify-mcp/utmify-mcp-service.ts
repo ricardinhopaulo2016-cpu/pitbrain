@@ -11,7 +11,14 @@ import type { PitbrainImport, PitbrainImportSummary } from '@/types/pitbrain'
 // Tools known ahead of time to be safe, read-only UTMify MCP calls — always classified read_only
 // and "reviewed" (a human, not just a heuristic, vouches for these) regardless of what the prefix/
 // description-based classifier below would otherwise say.
-export const UTMIFY_MCP_READ_ONLY_ALLOWLIST = ['get_dashboards', 'get_dashboard_summary', 'get_meta_ad_objects']
+export const UTMIFY_MCP_READ_ONLY_ALLOWLIST = [
+  'get_dashboards',
+  'get_dashboard_summary',
+  'get_meta_ad_objects',
+  'get_google_ad_objects',
+  'get_kwai_ad_objects',
+  'get_tiktok_ad_objects',
+]
 
 // Classification is prefix-based on the tool *name*, not a keyword scan over the whole
 // name+description — the previous classifier scanned `\b(get|list|...)\b` over the full
