@@ -107,6 +107,7 @@ export function buildMetaSyncErrorInfo(err: unknown, abortReason?: 'timeout' | '
       kind: 'timeout',
       title: 'Sync interrompido por demora',
       message: 'Sync interrompido por demora excessiva. Reduza o limite de campanhas/anúncios.',
+      actions: ['Reduzir escopo', 'Usar último sync válido'],
     }
   }
   if (isMetaRateLimitError(err)) {
@@ -114,7 +115,7 @@ export function buildMetaSyncErrorInfo(err: unknown, abortReason?: 'timeout' | '
       kind: 'rate_limit',
       title: 'Limite temporário da Meta atingido',
       message: 'A Meta recusou novas chamadas por excesso de requisições. Aguarde 30–60 minutos ou reduza o escopo do sync.',
-      actions: ['Tentar novamente depois', 'Reduzir escopo'],
+      actions: ['Tentar novamente depois', 'Reduzir escopo', 'Usar último sync válido'],
     }
   }
   if (err instanceof MissingMetaTokenError) {

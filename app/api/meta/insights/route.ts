@@ -16,6 +16,8 @@ export async function GET(req: NextRequest) {
   const datePreset = params.get('datePreset') ?? undefined
   const since = params.get('since') ?? undefined
   const until = params.get('until') ?? undefined
+  const limitParam = params.get('limit')
+  const limit = limitParam && Number.isFinite(Number(limitParam)) ? Number(limitParam) : undefined
 
   if (!adAccountId) {
     return NextResponse.json(
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const insights = await getInsights(adAccountId, level, { datePreset, since, until })
+    const insights = await getInsights(adAccountId, level, { datePreset, since, until, limit })
     return NextResponse.json({ insights })
   } catch (err) {
     return metaErrorResponse(err, 'insights')

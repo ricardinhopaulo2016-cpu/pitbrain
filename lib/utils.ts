@@ -68,6 +68,33 @@ export function parseCountValue(raw: string | number | null | undefined): number
   return isNaN(parsed) ? 0 : parsed
 }
 
+/**
+ * Runs `handler` over `items` with at most `concurrency` in flight at once — a worker-pool,
+ * not a batched `Promise.all` (the next item starts as soon as any slot frees up, not in lockstep
+ * batches). Default `concurrency=1` makes this a plain serial queue, which is what Meta Sync uses
+ * to keep request volume predictable.
+ */
+export async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  handler: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let cursor = 0
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor++
+      results[index] = await handler(items[index], index)
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(concurrency, items.length))
+  await Promise.all(Array.from({ length: workerCount }, worker))
+
+  return results
+}
+
 export function parseNumericValue(raw: string | undefined): number {
   if (!raw) return 0
   let cleaned = raw.replace(/[%\s]/g, '').trim()

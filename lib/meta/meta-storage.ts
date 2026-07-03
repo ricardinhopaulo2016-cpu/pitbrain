@@ -101,7 +101,23 @@ export function setSelectedAdAccountId(id: string | null): void {
   } catch {}
 }
 
-// ── Convenience: persist a full sync result at once ───────────────────────────────
+// ── Convenience: persist a full (or partial) sync result at once ─────────────────
+// `persistMetaSyncResult` is used for a fully completed sync; `persistPartialMetaSyncResult`
+// accepts whatever arrays a sync managed to collect before aborting (rate limit/timeout/cancel)
+// — without this, an incomplete sync left /dark-posts with nothing at all, even after it had
+// already fetched most of the structure.
+
+interface MetaSyncResultLike {
+  adAccountId: string
+  syncedAt: string
+  campaigns?: MetaCampaign[]
+  adsets?: MetaAdset[]
+  ads?: MetaAd[]
+  darkPosts?: MetaDarkPostAsset[]
+  counts?: Partial<StoredMetaSync['counts']>
+}
+
+const EMPTY_SYNC_COUNTS: StoredMetaSync['counts'] = { campaigns: 0, adsets: 0, ads: 0, creatives: 0, darkPosts: 0 }
 
 export function persistMetaSyncResult(result: {
   adAccountId: string
@@ -112,13 +128,20 @@ export function persistMetaSyncResult(result: {
   darkPosts: MetaDarkPostAsset[]
   counts: StoredMetaSync['counts']
 }): void {
-  saveMetaSync({ adAccountId: result.adAccountId, syncedAt: result.syncedAt, counts: result.counts })
-  saveMetaDarkPosts(result.adAccountId, result.darkPosts)
-  saveMetaCampaignStructure({
-    adAccountId: result.adAccountId,
-    syncedAt: result.syncedAt,
-    campaigns: result.campaigns,
-    adsets: result.adsets,
-    ads: result.ads,
-  })
+  persistPartialMetaSyncResult(result)
+}
+
+/** Same as `persistMetaSyncResult`, but every array/counts field is optional — call this from an abort/error path with whatever was collected so far. */
+export function persistPartialMetaSyncResult(result: MetaSyncResultLike): void {
+  const campaigns = result.campaigns ?? []
+  const adsets = result.adsets ?? []
+  const ads = result.ads ?? []
+  const darkPosts = result.darkPosts ?? []
+  const counts = { ...EMPTY_SYNC_COUNTS, ...result.counts }
+
+  saveMetaSync({ adAccountId: result.adAccountId, syncedAt: result.syncedAt, counts })
+  if (darkPosts.length > 0) saveMetaDarkPosts(result.adAccountId, darkPosts)
+  if (campaigns.length > 0 || adsets.length > 0 || ads.length > 0) {
+    saveMetaCampaignStructure({ adAccountId: result.adAccountId, syncedAt: result.syncedAt, campaigns, adsets, ads })
+  }
 }

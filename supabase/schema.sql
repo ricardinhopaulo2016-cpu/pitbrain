@@ -125,29 +125,81 @@ create index if not exists idx_pitbrain_settings_workspace_key on pitbrain_setti
 alter table pitbrain_settings enable row level security;
 
 -- ── pitbrain_meta_syncs ───────────────────────────────────────────────────────
+-- One row per (workspace, ad account). The snapshot columns (campaigns/adsets/
+-- ads/creatives/dark_posts/counts/status/error) hold the last *valid* structural
+-- dataset — they're only overwritten when a sync actually completes, or when
+-- there's no completed snapshot yet to protect. Every attempt (including a
+-- failed/partial one) still records its own outcome in last_attempt_status/
+-- last_attempt_error/last_attempt_at, without touching the snapshot — so a
+-- retry that hits a rate limit can never erase a previously good sync, while
+-- "Usar último sync válido" always resolves to real, complete data.
 create table if not exists pitbrain_meta_syncs (
-  id               uuid primary key default gen_random_uuid(),
-  workspace_id     uuid references pitbrain_workspaces(id) on delete cascade,
-  created_by       uuid references auth.users(id),
-  ad_account_id    text not null,
-  ad_account_name  text,
-  campaigns        jsonb default '[]'::jsonb,
-  adsets           jsonb default '[]'::jsonb,
-  ads              jsonb default '[]'::jsonb,
-  creatives        jsonb default '[]'::jsonb,
-  dark_posts       jsonb default '[]'::jsonb,
-  counts           jsonb default '{}'::jsonb,
-  status           text default 'completed',
-  error            text,
-  created_at       timestamptz default now()
+  id                 uuid primary key default gen_random_uuid(),
+  workspace_id       uuid references pitbrain_workspaces(id) on delete cascade,
+  created_by         uuid references auth.users(id),
+  ad_account_id      text not null,
+  ad_account_name    text,
+  campaigns          jsonb default '[]'::jsonb,
+  adsets             jsonb default '[]'::jsonb,
+  ads                jsonb default '[]'::jsonb,
+  creatives          jsonb default '[]'::jsonb,
+  dark_posts         jsonb default '[]'::jsonb,
+  counts             jsonb default '{}'::jsonb,
+  status             text default 'completed',
+  error              text,
+  last_attempt_status text,
+  last_attempt_error  text,
+  last_attempt_at     timestamptz,
+  created_at         timestamptz default now(),
+  updated_at         timestamptz default now()
 );
 
-alter table pitbrain_meta_syncs add column if not exists workspace_id uuid references pitbrain_workspaces(id) on delete cascade;
-alter table pitbrain_meta_syncs add column if not exists created_by   uuid references auth.users(id);
+alter table pitbrain_meta_syncs add column if not exists workspace_id        uuid references pitbrain_workspaces(id) on delete cascade;
+alter table pitbrain_meta_syncs add column if not exists created_by          uuid references auth.users(id);
+alter table pitbrain_meta_syncs add column if not exists updated_at          timestamptz default now();
+alter table pitbrain_meta_syncs add column if not exists last_attempt_status text;
+alter table pitbrain_meta_syncs add column if not exists last_attempt_error  text;
+alter table pitbrain_meta_syncs add column if not exists last_attempt_at     timestamptz;
 
 create index if not exists idx_pitbrain_meta_syncs_workspace on pitbrain_meta_syncs (workspace_id);
 
+-- Needed for `.upsert(row, { onConflict: 'workspace_id,ad_account_id' })` — the checkpoint
+-- write path. Partial (not a table constraint) so it never collides on legacy/local-mode rows
+-- that predate workspace scoping.
+create unique index if not exists ux_pitbrain_meta_syncs_workspace_account
+  on pitbrain_meta_syncs (workspace_id, ad_account_id) where workspace_id is not null;
+
+drop trigger if exists set_updated_at on pitbrain_meta_syncs;
+create trigger set_updated_at before update on pitbrain_meta_syncs
+  for each row execute function pitbrain_set_updated_at();
+
 alter table pitbrain_meta_syncs enable row level security;
+
+-- ── pitbrain_meta_creative_cache ─────────────────────────────────────────────
+-- Avoids re-fetching creatives from the Meta API on every sync. Keyed by
+-- (workspace_id, creative_id) rather than creative_id alone — creative ids are
+-- Meta-global, so a bare `id text primary key` would let two workspaces syncing
+-- the same ad account collide on each other's cache rows.
+create table if not exists pitbrain_meta_creative_cache (
+  id                        uuid primary key default gen_random_uuid(),
+  workspace_id              uuid references pitbrain_workspaces(id) on delete cascade,
+  creative_id               text not null,
+  creative                  jsonb not null default '{}'::jsonb,
+  object_story_id           text,
+  effective_object_story_id text,
+  video_id                  text,
+  permalink                 text,
+  updated_at                timestamptz default now(),
+  unique (workspace_id, creative_id)
+);
+
+create index if not exists idx_pitbrain_meta_creative_cache_workspace on pitbrain_meta_creative_cache (workspace_id);
+
+drop trigger if exists set_updated_at on pitbrain_meta_creative_cache;
+create trigger set_updated_at before update on pitbrain_meta_creative_cache
+  for each row execute function pitbrain_set_updated_at();
+
+alter table pitbrain_meta_creative_cache enable row level security;
 
 -- ── pitbrain_winners ──────────────────────────────────────────────────────────
 create table if not exists pitbrain_winners (
@@ -259,6 +311,19 @@ create policy "members can update meta syncs" on pitbrain_meta_syncs
   for update using (pitbrain_is_workspace_member(workspace_id));
 drop policy if exists "members can delete meta syncs" on pitbrain_meta_syncs;
 create policy "members can delete meta syncs" on pitbrain_meta_syncs
+  for delete using (pitbrain_is_workspace_member(workspace_id));
+
+drop policy if exists "members can select creative cache" on pitbrain_meta_creative_cache;
+create policy "members can select creative cache" on pitbrain_meta_creative_cache
+  for select using (pitbrain_is_workspace_member(workspace_id));
+drop policy if exists "members can insert creative cache" on pitbrain_meta_creative_cache;
+create policy "members can insert creative cache" on pitbrain_meta_creative_cache
+  for insert with check (pitbrain_is_workspace_member(workspace_id));
+drop policy if exists "members can update creative cache" on pitbrain_meta_creative_cache;
+create policy "members can update creative cache" on pitbrain_meta_creative_cache
+  for update using (pitbrain_is_workspace_member(workspace_id));
+drop policy if exists "members can delete creative cache" on pitbrain_meta_creative_cache;
+create policy "members can delete creative cache" on pitbrain_meta_creative_cache
   for delete using (pitbrain_is_workspace_member(workspace_id));
 
 drop policy if exists "members can select winners" on pitbrain_winners;

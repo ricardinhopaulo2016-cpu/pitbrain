@@ -139,6 +139,48 @@ sem rodar sync) e um bloco "Como renovar token?" com duas opções:
 > ⚠️ Depois de atualizar `META_ACCESS_TOKEN` na Vercel (Project Settings → Environment Variables),
 > é sempre necessário fazer **Redeploy** — a env nova só entra em vigor no próximo deploy.
 
+## Meta Sync otimizado
+
+O Meta Sync foi desenhado para pedir o mínimo possível à Meta API:
+
+- **Structure Sync é o padrão** (botão "Sincronizar Estrutura") — busca campanhas, conjuntos,
+  anúncios, criativos e extrai Dark Posts. Chamadas seriais (nunca `Promise.all` agressivo), com
+  um delay configurável entre cada iteração (`META_SYNC_REQUEST_DELAY_MS`, default 1200ms) e um
+  timeout global de 90s.
+- **Insights são separados** — seção própria "Insights de Performance", só habilitada depois de
+  existir um Structure Sync concluído para a conta, com escopo pequeno por padrão (nível anúncio,
+  últimos 7 dias, até 50 anúncios). Um rate limit em Insights nunca afeta o Structure Sync — são
+  estados de erro independentes. Performance principal continua vindo da **UTMify**; Insights da
+  Meta são complementares.
+- **Presets de escopo**: Seguro (ativas · 10 campanhas · 50 anúncios — default), Médio (ativas ·
+  25 · 100) e Completo (todas · 50 · 250 — pede confirmação antes de rodar, por ser mais pesado).
+  Um card de "plano estimado" mostra a estimativa de chamadas e avisos antes de sincronizar. O
+  botão "Sincronizar Insights" funciona como um quarto preset ("Insights") e também pede
+  confirmação explícita antes de rodar, já que faz chamadas extras separadas do Structure Sync.
+- **Cache de criativos**: criativos já buscados ficam salvos em `pitbrain_meta_creative_cache`
+  (workspace-scoped) e não são buscados de novo em syncs seguintes — só o que ainda não está em
+  cache é buscado na Meta, em lotes pequenos. Use "Forçar refresh de criativos" para ignorar o
+  cache quando precisar de dados atualizados.
+- **Checkpoint em Supabase**: o progresso do Structure Sync é salvo em `pitbrain_meta_syncs`
+  (workspace-scoped) por etapa — se o sync for interrompido (rate limit, timeout, cancelamento),
+  os dados parciais continuam disponíveis (na tela e em `/dark-posts`) e o botão "Usar último sync
+  válido" recupera o que já foi coletado, mesmo sem Supabase configurado (nesse caso usa o cache
+  local do navegador). O último sync **completo** fica protegido: uma tentativa nova que falhar no
+  meio do caminho nunca sobrescreve os dados de um sync válido anterior — o resultado da tentativa
+  mais recente (sucesso ou falha) é registrado à parte em `last_attempt_status`/`last_attempt_error`,
+  sem tocar no snapshot que "Usar último sync válido" lê.
+- **Rate limit**: se a Meta recusar chamadas, o Pitbrain tenta **uma única vez** de novo após 60s
+  de espera; se falhar de novo, aborta o sync e preserva os dados parciais já coletados — nunca
+  fica tentando de novo sem parar. Se continuar batendo limite, aguarde 30–60 minutos ou reduza o
+  escopo (preset Seguro).
+- Para uso contínuo em produção, prefira um **System User Token** (não expira automaticamente) —
+  veja "Renovar token da Meta" acima.
+
+> ⚠️ Esta seção depende de `pitbrain_meta_syncs` (com `updated_at` + índice único) e da nova tabela
+> `pitbrain_meta_creative_cache` — rode o `supabase/schema.sql` atualizado no SQL Editor (é
+> idempotente) antes de usar checkpoint/cache. Sem isso, o Meta Sync continua funcionando
+> normalmente, só sem persistir progresso parcial nem cachear criativos.
+
 ## Stack
 
 Next.js (App Router) + TypeScript + Supabase Auth + Postgres (banco principal, com fallback local).

@@ -27,6 +27,9 @@ export class MetaClient {
   // Serializes throttle() calls so concurrent requests (e.g. Promise.all fan-out during sync)
   // are spaced by MIN_INTERVAL_MS instead of all reading a stale lastRequestAt at once.
   private throttleQueue: Promise<void> = Promise.resolve()
+  // Best-effort snapshot of Meta's own rate-limit usage headers from the most recent response —
+  // debug-only, never read to decide whether to make a request.
+  private lastUsage: Record<string, unknown> | null = null
 
   constructor(options: MetaClientOptions = {}) {
     if (typeof window !== 'undefined') {
@@ -51,6 +54,34 @@ export class MetaClient {
     return turn
   }
 
+  /**
+   * Best-effort capture of Meta's rate-limit usage headers (x-app-usage, x-business-use-case-usage,
+   * x-ad-account-usage) — purely for debug via getLastUsage(), never used to gate requests. A
+   * missing header or unparseable JSON is silently ignored.
+   */
+  private captureUsageHeaders(res: Response): void {
+    const usage: Record<string, unknown> = {}
+    for (const header of ['x-app-usage', 'x-business-use-case-usage', 'x-ad-account-usage']) {
+      const raw = res.headers.get(header)
+      if (!raw) continue
+      try {
+        usage[header] = JSON.parse(raw)
+      } catch {
+        usage[header] = raw
+      }
+    }
+    if (Object.keys(usage).length === 0) return
+    this.lastUsage = usage
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[pitbrain:meta-client] usage', usage)
+    }
+  }
+
+  /** Debug-only snapshot of the most recent Meta rate-limit usage headers seen, if any. */
+  getLastUsage(): Record<string, unknown> | null {
+    return this.lastUsage
+  }
+
   private async requestJson<T>(url: URL, externalSignal?: AbortSignal): Promise<T> {
     await this.throttle()
 
@@ -73,6 +104,7 @@ export class MetaClient {
 
     try {
       const res = await fetch(url.toString(), { signal: controller.signal })
+      this.captureUsageHeaders(res)
       const json = await res.json().catch(() => null)
 
       if (!res.ok || json?.error) {

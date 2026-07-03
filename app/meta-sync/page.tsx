@@ -1,23 +1,28 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { PageShell } from '@/components/layout/PageShell'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { MetricCard } from '@/components/dashboard/MetricCard'
 import {
   ShieldCheck, RefreshCw, Layers, Megaphone, Sparkles, EyeOff,
   AlertTriangle, CheckCircle2, Wifi, WifiOff, XCircle, Loader2, HelpCircle, ChevronDown,
+  Gauge, BarChart2,
 } from 'lucide-react'
 import {
-  getLastMetaSync, persistMetaSyncResult, getSelectedAdAccountId, setSelectedAdAccountId,
-  type StoredMetaSync,
+  getLastMetaSync, persistMetaSyncResult, persistPartialMetaSyncResult,
+  getSelectedAdAccountId, setSelectedAdAccountId, type StoredMetaSync,
 } from '@/lib/meta/meta-storage'
 import { AdAccountCombobox } from '@/components/meta/AdAccountCombobox'
-import type { MetaAdAccount } from '@/lib/meta/meta-types'
-import type { SyncMetaAccountResult, MetaSyncScope, MetaSyncStage, MetaSyncCounts } from '@/lib/meta/meta-service'
+import type { MetaAdAccount, MetaInsight } from '@/lib/meta/meta-types'
+import type {
+  SyncMetaAccountResult, MetaSyncScope, MetaSyncStage, MetaSyncCounts, MetaSyncCheckpointData,
+} from '@/lib/meta/meta-service'
 import { DEFAULT_SYNC_SCOPE } from '@/lib/meta/meta-service'
 import type { MetaSyncErrorInfo, MetaConnectionStatus } from '@/lib/meta/meta-errors'
 import { META_TOKEN_RENEWAL_MESSAGE } from '@/lib/meta/meta-errors'
+import { GLOBAL_TIMEOUT_MS } from '@/lib/meta/meta-sync-constants'
+import { SYNC_PRESETS, DEFAULT_INSIGHTS_SCOPE, buildSyncPlan, planNeedsConfirmation, type MetaSyncPresetId } from '@/lib/meta/meta-sync-plan'
 import { cn } from '@/lib/utils'
 
 type ConnectionState = 'checking' | MetaConnectionStatus
@@ -26,7 +31,6 @@ type SyncPhase = 'idle' | MetaSyncStage | 'error' | 'cancelled'
 const OAUTH_ERROR_CODE = 190 // Meta's OAuthException code — covers expired, revoked, or malformed tokens
 const PERMISSION_ERROR_CODE = 10
 const RATE_LIMIT_CODES = [4, 17]
-const GLOBAL_TIMEOUT_MS = 60_000
 
 const STAGE_LABELS: Record<SyncPhase, string> = {
   idle: 'Aguardando',
@@ -35,7 +39,6 @@ const STAGE_LABELS: Record<SyncPhase, string> = {
   ads: 'Buscando anúncios',
   creatives: 'Buscando criativos',
   dark_posts: 'Extraindo dark posts',
-  insights: 'Buscando insights',
   done: 'Finalizado',
   error: 'Erro',
   cancelled: 'Cancelado',
@@ -47,6 +50,7 @@ interface StreamEvent {
   type: 'progress' | 'done' | 'error'
   stage?: MetaSyncStage
   counts?: Partial<MetaSyncCounts>
+  data?: MetaSyncCheckpointData
   result?: SyncMetaAccountResult
   kind?: string
   title?: string
@@ -66,10 +70,19 @@ export default function MetaSyncPage() {
   const [syncCounts, setSyncCounts] = useState<MetaSyncCounts>(EMPTY_COUNTS)
   const [syncError, setSyncError] = useState<MetaSyncErrorInfo | null>(null)
   const [syncIncomplete, setSyncIncomplete] = useState(false)
+  const [emptyReason, setEmptyReason] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<StoredMetaSync | null>(null)
   const [scope, setScope] = useState<MetaSyncScope>(DEFAULT_SYNC_SCOPE)
+  const [selectedPreset, setSelectedPreset] = useState<MetaSyncPresetId | 'custom'>('seguro')
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [forceRefreshCreatives, setForceRefreshCreatives] = useState(false)
   const [showRenewalHelp, setShowRenewalHelp] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
+
+  const [insightsSyncing, setInsightsSyncing] = useState(false)
+  const [insightsError, setInsightsError] = useState<string | null>(null)
+  const [insightsResult, setInsightsResult] = useState<MetaInsight[] | null>(null)
+  const [showInsightsConfirm, setShowInsightsConfirm] = useState(false)
 
   const abortControllerRef = useRef<AbortController | null>(null)
   const cancelledRef = useRef(false)
@@ -148,6 +161,10 @@ export default function MetaSyncPage() {
     setSyncIncomplete(false)
     setSyncPhase('idle')
     setSyncCounts(EMPTY_COUNTS)
+    setEmptyReason(null)
+    setInsightsResult(null)
+    setInsightsError(null)
+    setShowInsightsConfirm(false)
   }
 
   function handleClearSelection() {
@@ -157,13 +174,34 @@ export default function MetaSyncPage() {
     setSyncIncomplete(false)
     setSyncPhase('idle')
     setSyncCounts(EMPTY_COUNTS)
+    setEmptyReason(null)
+    setShowInsightsConfirm(false)
   }
 
-  async function handleSync() {
+  function applyPreset(id: MetaSyncPresetId) {
+    const preset = SYNC_PRESETS.find(p => p.id === id)
+    if (!preset) return
+    setScope(preset.scope)
+    setSelectedPreset(id)
+    setShowConfirm(false)
+  }
+
+  function updateScope(patch: Partial<MetaSyncScope>) {
+    setScope(s => ({ ...s, ...patch }))
+    setSelectedPreset('custom')
+    setShowConfirm(false)
+  }
+
+  const plan = useMemo(
+    () => (selectedAccountId ? buildSyncPlan(selectedAccountId, scope) : null),
+    [selectedAccountId, scope]
+  )
+
+  function handleSyncClick() {
     if (!selectedAccountId || syncing) return
 
     // Token already known to be expired/invalid/unauthorized — abort before
-    // attempting any campaigns/adsets/ads fetch.
+    // attempting any campaigns/adsets/ads fetch. isSyncing never flips to true here.
     if (connection !== 'connected') {
       setSyncError({
         kind: connection === 'permission_error' ? 'permission_error' : connection === 'rate_limited' ? 'rate_limit' : 'token',
@@ -182,6 +220,16 @@ export default function MetaSyncPage() {
       return
     }
 
+    if (plan && planNeedsConfirmation(plan) && !showConfirm) {
+      setShowConfirm(true)
+      return
+    }
+    setShowConfirm(false)
+    void runSync()
+  }
+
+  async function runSync() {
+    setShowConfirm(false) // one-time confirmation per click — re-asks next time a heavy scope is run
     const controller = new AbortController()
     abortControllerRef.current = controller
     cancelledRef.current = false
@@ -190,14 +238,24 @@ export default function MetaSyncPage() {
     setSyncing(true)
     setSyncError(null)
     setSyncIncomplete(false)
+    setEmptyReason(null)
     setSyncPhase('campaigns')
     setSyncCounts(EMPTY_COUNTS)
+
+    const accountName = adAccounts.find(a => a.id === selectedAccountId)?.name
+    const accumulated: MetaSyncCheckpointData = {}
+    let liveCounts: Partial<MetaSyncCounts> = {}
 
     try {
       const res = await fetch('/api/meta/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ adAccountId: selectedAccountId, scope }),
+        body: JSON.stringify({
+          adAccountId: selectedAccountId,
+          adAccountName: accountName,
+          scope,
+          forceRefreshCreatives,
+        }),
         signal: controller.signal,
       })
 
@@ -231,7 +289,11 @@ export default function MetaSyncPage() {
           const event = JSON.parse(line) as StreamEvent
           if (event.type === 'progress' && event.stage) {
             setSyncPhase(event.stage)
-            if (event.counts) setSyncCounts(prev => ({ ...prev, ...event.counts }))
+            if (event.counts) {
+              liveCounts = { ...liveCounts, ...event.counts }
+              setSyncCounts(prev => ({ ...prev, ...event.counts }))
+            }
+            if (event.data) Object.assign(accumulated, event.data)
           } else if (event.type === 'done') {
             finalResult = event.result
           } else if (event.type === 'error') {
@@ -250,10 +312,21 @@ export default function MetaSyncPage() {
         setSyncPhase(streamError.kind === 'cancelled' ? 'cancelled' : 'error')
         setSyncIncomplete(true)
         if (streamError.partial) setSyncCounts(prev => ({ ...prev, ...streamError.partial }))
+        persistPartialMetaSyncResult({
+          adAccountId: selectedAccountId,
+          syncedAt: new Date().toISOString(),
+          campaigns: accumulated.campaigns,
+          adsets: accumulated.adsets,
+          ads: accumulated.ads,
+          darkPosts: accumulated.darkPosts,
+          counts: liveCounts,
+        })
+        setLastSync(getLastMetaSync(selectedAccountId))
         return
       }
 
       if (finalResult) {
+        if (finalResult.emptyReason) setEmptyReason(finalResult.emptyReason)
         persistMetaSyncResult(finalResult)
         setLastSync(getLastMetaSync(selectedAccountId))
         setSyncPhase('done')
@@ -268,6 +341,7 @@ export default function MetaSyncPage() {
             kind: 'timeout',
             title: 'Sync interrompido por demora',
             message: 'O sync demorou demais e foi interrompido. Reduza o escopo e tente novamente.',
+            actions: ['Reduzir escopo', 'Usar último sync válido'],
           })
           setSyncPhase('error')
         }
@@ -280,6 +354,16 @@ export default function MetaSyncPage() {
         setSyncPhase('error')
       }
       setSyncIncomplete(true)
+      persistPartialMetaSyncResult({
+        adAccountId: selectedAccountId,
+        syncedAt: new Date().toISOString(),
+        campaigns: accumulated.campaigns,
+        adsets: accumulated.adsets,
+        ads: accumulated.ads,
+        darkPosts: accumulated.darkPosts,
+        counts: liveCounts,
+      })
+      setLastSync(getLastMetaSync(selectedAccountId))
     } finally {
       clearTimeout(timeoutTimer)
       abortControllerRef.current = null
@@ -291,6 +375,77 @@ export default function MetaSyncPage() {
     cancelledRef.current = true
     abortControllerRef.current?.abort()
   }
+
+  async function handleUseLastSync() {
+    if (!selectedAccountId) return
+    try {
+      const res = await fetch(`/api/meta/sync/last?adAccountId=${encodeURIComponent(selectedAccountId)}`)
+      const json = await res.json()
+      const row = json?.sync
+      if (row) {
+        persistPartialMetaSyncResult({
+          adAccountId: row.ad_account_id,
+          syncedAt: row.updated_at ?? row.created_at,
+          campaigns: row.campaigns ?? [],
+          adsets: row.adsets ?? [],
+          ads: row.ads ?? [],
+          darkPosts: row.dark_posts ?? [],
+          counts: row.counts ?? undefined,
+        })
+      }
+    } catch {
+      // fall through to whatever's already in localStorage below
+    }
+    setLastSync(getLastMetaSync(selectedAccountId))
+    setSyncError(null)
+    setSyncIncomplete(false)
+    setSyncPhase('idle')
+  }
+
+  function handleErrorAction(action: string) {
+    if (action === 'Reduzir escopo') applyPreset('seguro')
+    else if (action === 'Tentar novamente depois') { setSyncError(null); setSyncPhase('idle') }
+    else if (action === 'Usar último sync válido') void handleUseLastSync()
+  }
+
+  // Insights make extra Meta calls on top of Structure Sync, so the button requires an explicit
+  // second click to confirm before it actually fetches — mirrors the heavy-scope confirm banner.
+  function handleInsightsSyncClick() {
+    if (!selectedAccountId || insightsSyncing) return
+    if (!showInsightsConfirm) {
+      setShowInsightsConfirm(true)
+      return
+    }
+    setShowInsightsConfirm(false)
+    void runInsightsSync()
+  }
+
+  async function runInsightsSync() {
+    if (!selectedAccountId || insightsSyncing) return
+    setInsightsSyncing(true)
+    setInsightsError(null)
+    try {
+      const params = new URLSearchParams({
+        adAccountId: selectedAccountId,
+        level: DEFAULT_INSIGHTS_SCOPE.level,
+        datePreset: DEFAULT_INSIGHTS_SCOPE.datePreset,
+        limit: String(DEFAULT_INSIGHTS_SCOPE.limit),
+      })
+      const res = await fetch(`/api/meta/insights?${params.toString()}`)
+      const json = await res.json()
+      if (!res.ok) {
+        setInsightsError(json.error ?? 'Erro ao buscar insights.')
+        return
+      }
+      setInsightsResult(json.insights ?? [])
+    } catch (err) {
+      setInsightsError(err instanceof Error ? err.message : 'Erro ao buscar insights.')
+    } finally {
+      setInsightsSyncing(false)
+    }
+  }
+
+  const insightsAvailable = lastSync !== null
 
   return (
     <PageShell className="space-y-6">
@@ -309,9 +464,9 @@ export default function MetaSyncPage() {
           ...(selectedAccountId ? [{ label: selectedAccountId }] : []),
         ]}
         action={{
-          label: syncing ? 'Cancelar sync' : 'Sincronizar Meta',
+          label: syncing ? 'Cancelar sync' : 'Sincronizar Estrutura',
           icon: syncing ? XCircle : RefreshCw,
-          onClick: syncing ? handleCancelSync : handleSync,
+          onClick: syncing ? handleCancelSync : handleSyncClick,
         }}
       />
 
@@ -320,6 +475,7 @@ export default function MetaSyncPage() {
         <EyeOff className="h-4 w-4 text-pb-blue shrink-0" />
         <p className="text-sm text-pb-text">
           <span className="font-semibold">Modo leitura.</span> Nenhuma campanha será criada, editada ou publicada.
+          Modo recomendado: estrutura sem insights.
         </p>
       </div>
 
@@ -463,72 +619,144 @@ export default function MetaSyncPage() {
 
       {/* Sync scope controls */}
       {connection === 'connected' && (
-        <div className="bg-pb-card border border-pb-border rounded-xl p-4">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-pb-border font-semibold mb-3">Escopo do sync</p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <label className="text-xs text-pb-muted space-y-1 block">
-              <span className="block">Status</span>
-              <select
-                value={scope.status}
-                disabled={syncing}
-                onChange={e => setScope(s => ({ ...s, status: e.target.value === 'all' ? 'all' : 'active' }))}
-                className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text disabled:opacity-50"
-              >
-                <option value="active">Ativas</option>
-                <option value="all">Todas</option>
-              </select>
-            </label>
-
-            <label className="text-xs text-pb-muted space-y-1 block">
-              <span className="block">Limite de campanhas</span>
-              <select
-                value={scope.campaignLimit}
-                disabled={syncing}
-                onChange={e => setScope(s => ({ ...s, campaignLimit: Number(e.target.value) }))}
-                className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text disabled:opacity-50"
-              >
-                {[10, 25, 50].map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-
-            <label className="text-xs text-pb-muted space-y-1 block">
-              <span className="block">Limite de anúncios</span>
-              <select
-                value={scope.adLimit}
-                disabled={syncing}
-                onChange={e => setScope(s => ({ ...s, adLimit: Number(e.target.value) }))}
-                className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text disabled:opacity-50"
-              >
-                {[50, 100, 250].map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-
-            <label className="text-xs text-pb-muted space-y-1 block">
-              <span className="block">Nome contém</span>
-              <input
-                type="text"
-                value={scope.nameContains ?? ''}
-                disabled={syncing}
-                onChange={e => setScope(s => ({ ...s, nameContains: e.target.value }))}
-                placeholder="Opcional"
-                className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text placeholder:text-pb-muted/50 disabled:opacity-50"
-              />
-            </label>
+        <div className="bg-pb-card border border-pb-border rounded-xl p-4 space-y-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-pb-border font-semibold mb-3">Presets</p>
+            <div className="flex flex-wrap gap-2">
+              {SYNC_PRESETS.map(preset => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  disabled={syncing}
+                  onClick={() => applyPreset(preset.id)}
+                  className={cn(
+                    'text-left rounded-lg px-3 py-2 border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                    selectedPreset === preset.id
+                      ? 'border-pb-purple/60 bg-pb-purple/10'
+                      : 'border-pb-border bg-pb-card-alt hover:border-pb-purple/30'
+                  )}
+                >
+                  <span className="block text-sm font-semibold text-pb-text">
+                    {preset.label}
+                    {preset.needsConfirmation && <span className="ml-1.5 text-[10px] text-pb-yellow font-normal">(confirma)</span>}
+                  </span>
+                  <span className="block text-[11px] text-pb-muted mt-0.5">{preset.description}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
-          <label className="flex items-start gap-2.5 mt-4 cursor-pointer">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-pb-border font-semibold mb-3">Escopo do sync</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <label className="text-xs text-pb-muted space-y-1 block">
+                <span className="block">Status</span>
+                <select
+                  value={scope.status}
+                  disabled={syncing}
+                  onChange={e => updateScope({ status: e.target.value === 'all' ? 'all' : 'active' })}
+                  className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text disabled:opacity-50"
+                >
+                  <option value="active">Ativas</option>
+                  <option value="all">Todas</option>
+                </select>
+              </label>
+
+              <label className="text-xs text-pb-muted space-y-1 block">
+                <span className="block">Limite de campanhas</span>
+                <select
+                  value={scope.campaignLimit}
+                  disabled={syncing}
+                  onChange={e => updateScope({ campaignLimit: Number(e.target.value) })}
+                  className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text disabled:opacity-50"
+                >
+                  {[10, 25, 50].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+
+              <label className="text-xs text-pb-muted space-y-1 block">
+                <span className="block">Limite de anúncios</span>
+                <select
+                  value={scope.adLimit}
+                  disabled={syncing}
+                  onChange={e => updateScope({ adLimit: Number(e.target.value) })}
+                  className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text disabled:opacity-50"
+                >
+                  {[50, 100, 250].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+
+              <label className="text-xs text-pb-muted space-y-1 block">
+                <span className="block">Nome da campanha contém</span>
+                <input
+                  type="text"
+                  value={scope.nameContains ?? ''}
+                  disabled={syncing}
+                  onChange={e => updateScope({ nameContains: e.target.value })}
+                  placeholder="Ex: FLEYN, FNL-V7, EE1K, TC"
+                  className="w-full bg-pb-card-alt border border-pb-border rounded-lg px-2.5 py-1.5 text-sm text-pb-text placeholder:text-pb-muted/50 disabled:opacity-50"
+                />
+              </label>
+            </div>
+            <p className="text-[11px] text-pb-muted/70 mt-2">
+              Este filtro busca no nome da campanha. Para filtrar anúncios por remessa/hook (ex: &quot;-R2-&quot;), use a busca em Dark Posts/Winners depois do sync.
+            </p>
+          </div>
+
+          <label className="flex items-start gap-2.5 cursor-pointer">
             <input
               type="checkbox"
-              checked={scope.includeInsights}
+              checked={forceRefreshCreatives}
               disabled={syncing}
-              onChange={e => setScope(s => ({ ...s, includeInsights: e.target.checked }))}
+              onChange={e => setForceRefreshCreatives(e.target.checked)}
               className="mt-0.5 accent-pb-purple"
             />
             <span>
-              <span className="block text-sm text-pb-text">Incluir insights de performance</span>
-              <span className="block text-xs text-pb-muted">Insights fazem mais chamadas e podem bater limite da Meta.</span>
+              <span className="block text-sm text-pb-text">Forçar refresh de criativos</span>
+              <span className="block text-xs text-pb-muted">Ignora o cache e busca todos os criativos de novo na Meta.</span>
             </span>
           </label>
+
+          {plan && (
+            <div className="rounded-lg px-3.5 py-3" style={{ background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.2)' }}>
+              <div className="flex items-center gap-2">
+                <Gauge className="h-3.5 w-3.5 text-pb-blue shrink-0" />
+                <p className="text-xs text-pb-text font-medium">Plano estimado: ~{plan.estimatedRequests} chamadas à Meta</p>
+              </div>
+              {plan.warnings.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {plan.warnings.map(w => (
+                    <li key={w} className="text-[11px] text-pb-yellow flex items-start gap-1.5">
+                      <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                      {w}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {showConfirm && (
+            <div className="rounded-lg px-3.5 py-3 space-y-2.5" style={{ background: 'rgba(250, 204, 21, 0.08)', border: '1px solid rgba(250, 204, 21, 0.3)' }}>
+              <p className="text-xs text-pb-text font-medium">
+                Esse sync pode bater limite da Meta. Recomendado usar Structure Sync sem insights, com escopo menor.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => void runSync()}
+                  className="text-xs font-semibold text-white bg-pb-purple hover:bg-pb-purple/90 rounded-lg px-3 py-1.5 transition-colors"
+                >
+                  Confirmar mesmo assim
+                </button>
+                <button
+                  onClick={() => { applyPreset('seguro'); }}
+                  className="text-xs font-medium text-pb-text border border-pb-border rounded-lg px-3 py-1.5 hover:bg-pb-card-alt transition-colors"
+                >
+                  Ajustar escopo (usar Seguro)
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -552,13 +780,24 @@ export default function MetaSyncPage() {
             {syncError.actions && syncError.actions.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {syncError.actions.map(action => (
-                  <span key={action} className="text-xs text-pb-muted border border-pb-border rounded-lg px-2.5 py-1">
+                  <button
+                    key={action}
+                    onClick={() => handleErrorAction(action)}
+                    className="text-xs text-pb-text border border-pb-border rounded-lg px-2.5 py-1 hover:bg-pb-card-alt transition-colors"
+                  >
                     {action}
-                  </span>
+                  </button>
                 ))}
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {emptyReason && !syncing && (
+        <div className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: 'rgba(148, 163, 184, 0.06)', border: '1px solid rgba(148, 163, 184, 0.2)' }}>
+          <AlertTriangle className="h-4 w-4 text-pb-muted shrink-0" />
+          <p className="text-sm text-pb-text">{emptyReason}</p>
         </div>
       )}
 
@@ -581,11 +820,80 @@ export default function MetaSyncPage() {
                 <MetricCard title="Dark Posts" value={String((showLiveCounts ? syncCounts.darkPosts : lastSync?.counts.darkPosts) ?? 0)} icon={EyeOff} highlight="good" />
               </div>
               {!lastSync && !syncing && !syncIncomplete && (
-                <p className="text-xs text-pb-muted mt-4">Nenhum sync realizado ainda. Clique em &quot;Sincronizar Meta&quot; para importar a estrutura da conta.</p>
+                <p className="text-xs text-pb-muted mt-4">Nenhum sync realizado ainda. Clique em &quot;Sincronizar Estrutura&quot; para importar a estrutura da conta.</p>
               )}
             </>
           )
         })()}
+      </div>
+
+      {/* ── Insights de Performance — fully separate flow, own state, own errors ── */}
+      <div className="rounded-xl border border-pb-border overflow-hidden">
+        <div className="px-4 py-3 bg-pb-card flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-sm font-semibold text-pb-text flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-pb-purple" />
+              Insights de Performance
+            </p>
+            <p className="text-xs text-pb-muted mt-1">
+              Complementar — a performance principal do Pitbrain vem da UTMify. Escopo padrão: nível anúncio, últimos 7 dias, até 50 anúncios.
+            </p>
+          </div>
+          <button
+            onClick={handleInsightsSyncClick}
+            disabled={!insightsAvailable || insightsSyncing}
+            title={!insightsAvailable ? 'Rode um Structure Sync primeiro.' : undefined}
+            className="inline-flex items-center gap-2 text-sm font-semibold text-white bg-pb-purple hover:bg-pb-purple/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg px-3.5 py-2 transition-colors shrink-0"
+          >
+            {insightsSyncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart2 className="h-4 w-4" />}
+            Sincronizar Insights
+          </button>
+        </div>
+
+        <div className="px-4 py-3 bg-pb-card-alt space-y-2">
+          {!insightsAvailable && (
+            <p className="text-xs text-pb-muted">Disponível depois de um Structure Sync concluído para esta conta.</p>
+          )}
+          <p className="text-[11px] text-pb-yellow flex items-start gap-1.5">
+            <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+            Insights fazem mais chamadas e podem bater limite da Meta. Use apenas quando necessário.
+          </p>
+
+          {showInsightsConfirm && (
+            <div className="rounded-lg px-3.5 py-3 space-y-2.5" style={{ background: 'rgba(250, 204, 21, 0.08)', border: '1px solid rgba(250, 204, 21, 0.3)' }}>
+              <p className="text-xs text-pb-text font-medium">
+                Confirma sincronizar Insights agora? Isso faz chamadas extras à Meta, separadas do Structure Sync.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleInsightsSyncClick}
+                  className="text-xs font-semibold text-white bg-pb-purple hover:bg-pb-purple/90 rounded-lg px-3 py-1.5 transition-colors"
+                >
+                  Confirmar Insights
+                </button>
+                <button
+                  onClick={() => setShowInsightsConfirm(false)}
+                  className="text-xs font-medium text-pb-text border border-pb-border rounded-lg px-3 py-1.5 hover:bg-pb-card-alt transition-colors"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {insightsError && (
+            <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+              <p className="text-xs text-pb-red">{insightsError}</p>
+              <p className="text-[11px] text-pb-muted mt-1">Este erro não afeta o Structure Sync.</p>
+            </div>
+          )}
+
+          {insightsResult && !insightsError && (
+            <p className="text-xs text-pb-text">
+              {insightsResult.length} {insightsResult.length === 1 ? 'insight' : 'insights'} carregados (últimos 7 dias).
+            </p>
+          )}
+        </div>
       </div>
     </PageShell>
   )
