@@ -113,6 +113,32 @@ META_DEFAULT_AD_ACCOUNT_ID=
 > - Depois de alterar variáveis de ambiente na Vercel, é preciso fazer **Redeploy** — a Vercel não aplica novas envs em deploys já existentes.
 > - Se o token da Meta expirar, gere um novo (veja "Como renovar token?" em `/meta-sync`) e atualize `META_ACCESS_TOKEN` — local e na Vercel.
 
+## Renovar token da Meta
+
+O Meta Sync é somente leitura (`ads_read`) e usa um único token global, lido de `META_ACCESS_TOKEN` no
+server — nunca é exposto ao browser nem aparece em logs. Quando o token expira, `/meta-sync` mostra
+"Token da Meta expirado ou inválido" com um botão **Testar conexão** (chama `GET /api/meta/ad-accounts`,
+sem rodar sync) e um bloco "Como renovar token?" com duas opções:
+
+**Opção rápida — Graph API Explorer** (bom para testar, mas expira em poucas horas/dias):
+1. Abra [Meta Developers → Graph API Explorer](https://developers.facebook.com/tools/explorer/).
+2. Selecione o app **PITBRAIN**.
+3. Adicione a permissão `ads_read`.
+4. Gere o novo token.
+5. Atualize `META_ACCESS_TOKEN` na Vercel.
+6. Faça **Redeploy**.
+
+**Opção recomendada — System User Token** (não expira automaticamente, ideal para produção):
+1. Acesse **Business Settings** do Business Manager.
+2. Vá em **Usuários do sistema**.
+3. Crie ou selecione um usuário do sistema.
+4. Dê acesso à conta de anúncios que o Pitbrain deve ler.
+5. Gere um token com a permissão `ads_read`.
+6. Atualize `META_ACCESS_TOKEN` na Vercel e faça **Redeploy**.
+
+> ⚠️ Depois de atualizar `META_ACCESS_TOKEN` na Vercel (Project Settings → Environment Variables),
+> é sempre necessário fazer **Redeploy** — a env nova só entra em vigor no próximo deploy.
+
 ## Stack
 
 Next.js (App Router) + TypeScript + Supabase Auth + Postgres (banco principal, com fallback local).

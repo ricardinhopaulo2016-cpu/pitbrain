@@ -69,6 +69,7 @@ export default function MetaSyncPage() {
   const [lastSync, setLastSync] = useState<StoredMetaSync | null>(null)
   const [scope, setScope] = useState<MetaSyncScope>(DEFAULT_SYNC_SCOPE)
   const [showRenewalHelp, setShowRenewalHelp] = useState(false)
+  const [testingConnection, setTestingConnection] = useState(false)
 
   const abortControllerRef = useRef<AbortController | null>(null)
   const cancelledRef = useRef(false)
@@ -109,6 +110,14 @@ export default function MetaSyncPage() {
   useEffect(() => {
     loadAdAccounts()
   }, [loadAdAccounts])
+
+  // Lightweight check only — GET /api/meta/ad-accounts, never triggers a full sync.
+  async function handleTestConnection() {
+    if (testingConnection || syncing) return
+    setTestingConnection(true)
+    await loadAdAccounts()
+    setTestingConnection(false)
+  }
 
   // Initial selection priority: stored choice → env default → first account — only once, on load.
   useEffect(() => {
@@ -327,14 +336,44 @@ export default function MetaSyncPage() {
           <ChevronDown className={cn('h-4 w-4 text-pb-muted transition-transform', showRenewalHelp && 'rotate-180')} />
         </button>
         {showRenewalHelp && (
-          <ol className="px-4 py-4 space-y-2 text-xs text-pb-muted bg-pb-card-alt list-decimal list-inside">
-            <li>Acesse <span className="text-pb-text">Meta Developers → Graph API Explorer</span>.</li>
-            <li>Selecione o app <span className="text-pb-text">Pitbrain</span>.</li>
-            <li>Adicione a permissão <span className="text-pb-text font-mono">ads_read</span>.</li>
-            <li>Gere o novo token.</li>
-            <li>Atualize a variável <span className="text-pb-text font-mono">META_ACCESS_TOKEN</span>.</li>
-          </ol>
+          <div className="px-4 py-4 space-y-4 text-xs text-pb-muted bg-pb-card-alt">
+            <div>
+              <p className="text-pb-text font-semibold mb-2">Opção rápida: Graph API Explorer</p>
+              <ol className="space-y-1.5 list-decimal list-inside">
+                <li>Abra <span className="text-pb-text">Meta Developers → Graph API Explorer</span>.</li>
+                <li>Selecione o app <span className="text-pb-text">PITBRAIN</span>.</li>
+                <li>Adicione a permissão <span className="text-pb-text font-mono">ads_read</span>.</li>
+                <li>Gere o novo token.</li>
+                <li>Atualize <span className="text-pb-text font-mono">META_ACCESS_TOKEN</span> na Vercel.</li>
+                <li>Faça <span className="text-pb-text">Redeploy</span>.</li>
+              </ol>
+            </div>
+            <div className="pt-3" style={{ borderTop: '1px solid rgba(42,42,64,0.5)' }}>
+              <p className="text-pb-text font-semibold mb-2">Opção recomendada: System User Token</p>
+              <p className="text-[11px] text-pb-muted/80 mb-2">Não expira automaticamente — melhor para uso contínuo em produção.</p>
+              <ol className="space-y-1.5 list-decimal list-inside">
+                <li>Acesse <span className="text-pb-text">Business Settings</span>.</li>
+                <li>Vá em <span className="text-pb-text">Usuários do sistema</span>.</li>
+                <li>Crie ou selecione um usuário do sistema.</li>
+                <li>Dê acesso à conta de anúncios.</li>
+                <li>Gere um token com a permissão <span className="text-pb-text font-mono">ads_read</span>.</li>
+                <li>Atualize <span className="text-pb-text font-mono">META_ACCESS_TOKEN</span> na Vercel e faça Redeploy.</li>
+              </ol>
+            </div>
+          </div>
         )}
+      </div>
+
+      {/* Manual connection check — GET /api/meta/ad-accounts only, no sync */}
+      <div>
+        <button
+          onClick={handleTestConnection}
+          disabled={testingConnection || syncing || connection === 'checking'}
+          className="inline-flex items-center gap-2 text-sm font-medium text-pb-text bg-pb-card border border-pb-border rounded-lg px-3.5 py-2 hover:bg-pb-card-alt transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {testingConnection ? <Loader2 className="h-4 w-4 animate-spin text-pb-purple" /> : <Wifi className="h-4 w-4 text-pb-purple" />}
+          Testar conexão
+        </button>
       </div>
 
       {/* Connection / account status */}
@@ -357,6 +396,11 @@ export default function MetaSyncPage() {
             <div>
               <p className="text-sm font-semibold text-pb-text">Token da Meta expirado ou inválido</p>
               <p className="text-xs text-pb-muted mt-1">{META_TOKEN_RENEWAL_MESSAGE}</p>
+            </div>
+            <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+              <p className="text-xs font-semibold text-pb-red">
+                Token atual inválido. Atualize as variáveis de ambiente e faça Redeploy.
+              </p>
             </div>
             <div className="text-[11px] text-pb-muted space-y-0.5">
               <p><span className="text-pb-text font-medium">Local:</span> atualize .env.local e reinicie <span className="font-mono">npm run dev</span>.</p>
