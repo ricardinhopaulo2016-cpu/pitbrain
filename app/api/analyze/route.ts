@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdminClient } from '@/lib/supabase'
+import { guardAuthorizedAccess } from '@/lib/auth/get-current-user'
 import { callDiagnosis } from '@/lib/openai'
 import { MissingAPIKeyError } from '@/lib/ai'
 import { SummaryMetrics } from '@/types/metrics'
 
 export async function POST(req: NextRequest) {
+  const denied = await guardAuthorizedAccess()
+  if (denied) return denied
+
   try {
     const body = await req.json()
     const { sessionId, metrics } = body as { sessionId: string; metrics: SummaryMetrics }

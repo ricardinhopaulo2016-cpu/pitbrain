@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
 import { listAdAccounts } from '@/lib/meta/meta-service'
 import { metaErrorResponse } from '@/lib/meta/meta-errors'
+import { guardAuthorizedAccess } from '@/lib/auth/get-current-user'
 
 export async function GET() {
+  const denied = await guardAuthorizedAccess()
+  if (denied) return denied
+
   try {
     const adAccounts = await listAdAccounts()
     // Not a secret (just an account id) — surfaced so the client can apply the

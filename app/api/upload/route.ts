@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdminClient } from '@/lib/supabase'
 import { getStorageMode } from '@/lib/storage/mode'
+import { guardAuthorizedAccess } from '@/lib/auth/get-current-user'
 import { parseMetaFileText } from '@/lib/parsers/meta-parser'
 import { parseUtmifyCsv } from '@/lib/parsers/utmify-parser'
 
@@ -18,6 +19,9 @@ async function fileToText(file: File): Promise<string> {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = await guardAuthorizedAccess()
+  if (denied) return denied
+
   try {
     const formData = await req.formData()
     const metaFile = formData.get('meta') as File | null

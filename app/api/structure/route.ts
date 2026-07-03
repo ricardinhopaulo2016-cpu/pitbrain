@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdminClient } from '@/lib/supabase'
 import { getStorageMode } from '@/lib/storage/mode'
+import { guardAuthorizedAccess } from '@/lib/auth/get-current-user'
 import type { MetaCampaign } from '@/types/meta'
 import { buildCampaignStructure } from '@/lib/parsers/structure-parser'
 
 export async function GET(req: NextRequest) {
+  const denied = await guardAuthorizedAccess()
+  if (denied) return denied
+
   const sessionId = req.nextUrl.searchParams.get('sessionId')
   if (!sessionId) {
     return NextResponse.json({ error: 'sessionId é obrigatório.' }, { status: 400 })

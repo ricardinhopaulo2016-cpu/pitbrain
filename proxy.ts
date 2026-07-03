@@ -9,7 +9,7 @@ const PROTECTED_PREFIXES = [
 
 const AUTH_PAGES = ['/login', '/register']
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { response, user, configured, unauthorized } = await updateSession(request)
 
   // Supabase not configured — local mode fallback, no auth gate.
@@ -22,6 +22,18 @@ export async function middleware(request: NextRequest) {
   }
 
   const path = request.nextUrl.pathname
+
+  // Root is a special case (not a prefix match — every path starts with "/"):
+  // signed-in users go straight to the dashboard, signed-out users to login.
+  if (path === '/') {
+    if (!user) {
+      const loginUrl = new URL('/login', request.url)
+      loginUrl.searchParams.set('redirect', path)
+      return NextResponse.redirect(loginUrl)
+    }
+    return NextResponse.redirect(new URL('/dashboard', request.url))
+  }
+
   const isProtected = PROTECTED_PREFIXES.some(p => path === p || path.startsWith(`${p}/`))
   const isAuthPage = AUTH_PAGES.some(p => path === p || path.startsWith(`${p}/`))
 

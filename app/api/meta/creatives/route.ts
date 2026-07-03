@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAdCreatives } from '@/lib/meta/meta-service'
 import { metaErrorResponse } from '@/lib/meta/meta-errors'
+import { guardAuthorizedAccess } from '@/lib/auth/get-current-user'
 
 export async function GET(req: NextRequest) {
+  const denied = await guardAuthorizedAccess()
+  if (denied) return denied
+
   const adAccountId = req.nextUrl.searchParams.get('adAccountId') ?? process.env.META_DEFAULT_AD_ACCOUNT_ID
   const idsParam = req.nextUrl.searchParams.get('ids')
 

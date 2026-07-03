@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runMetaSync, DEFAULT_SYNC_SCOPE, type MetaSyncScope, type MetaSyncCounts } from '@/lib/meta/meta-service'
 import { buildMetaSyncErrorInfo } from '@/lib/meta/meta-errors'
+import { guardAuthorizedAccess } from '@/lib/auth/get-current-user'
 
 const GLOBAL_TIMEOUT_MS = 60_000
 
@@ -16,6 +17,9 @@ function parseScope(input: unknown): MetaSyncScope {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = await guardAuthorizedAccess()
+  if (denied) return denied
+
   let adAccountId: string | undefined
   let scope: MetaSyncScope = DEFAULT_SYNC_SCOPE
 

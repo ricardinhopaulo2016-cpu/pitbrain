@@ -43,7 +43,8 @@ O Pitbrain detecta automaticamente (`getStorageMode()`) se o Supabase está conf
 - Exige login (`/login`) — **cadastro público está desativado** (`/register` só mostra "Cadastro desativado"). Acesso restrito aos e-mails listados em `PITBRAIN_ALLOWED_EMAILS` (veja "Acesso restrito" abaixo). Cada usuário pertence a um **workspace** (criado automaticamente ao ser criado no Supabase Auth) e só vê os dados desse workspace.
 - Imports, active import e (futuramente) meta syncs/winners ficam no banco, por workspace — compartilhado entre toda a equipe.
 - Rotas de escrita usam o client server-side com `service_role` (`getSupabaseAdminClient()`), que nunca roda no browser.
-- `middleware.ts` protege as rotas principais (`/dashboard`, `/upload`, `/imports`, etc.) — sem sessão, redireciona para `/login`.
+- `proxy.ts` protege as rotas principais (`/`, `/dashboard`, `/upload`, `/imports`, etc.) — sem sessão, redireciona para `/login`; logado, `/` vai direto para `/dashboard`.
+- As rotas de API (`/api/imports`, `/api/settings/active-import`, `/api/upload`, `/api/analyze`, `/api/metrics`, `/api/structure`, `/api/meta/*`) também exigem sessão autorizada quando o Supabase está configurado — `proxy.ts` não cobre `/api/*`, então cada rota valida o usuário no próprio handler.
 - Schema: veja `supabase/schema.sql` e `supabase/README.md`. Rode o schema no **SQL Editor** do Supabase antes de usar o modo Supabase.
 - `GET /api/supabase/health` informa se o Supabase está configurado e se o schema já foi instalado (`tablesReady`).
 

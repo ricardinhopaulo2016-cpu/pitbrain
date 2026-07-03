@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getInsights } from '@/lib/meta/meta-service'
 import { metaErrorResponse } from '@/lib/meta/meta-errors'
+import { guardAuthorizedAccess } from '@/lib/auth/get-current-user'
 import type { MetaInsightLevel } from '@/lib/meta/meta-types'
 
 const VALID_LEVELS: MetaInsightLevel[] = ['campaign', 'adset', 'ad']
 
 export async function GET(req: NextRequest) {
+  const denied = await guardAuthorizedAccess()
+  if (denied) return denied
+
   const params = req.nextUrl.searchParams
   const adAccountId = params.get('adAccountId') ?? process.env.META_DEFAULT_AD_ACCOUNT_ID
   const level = (params.get('level') ?? 'campaign') as MetaInsightLevel

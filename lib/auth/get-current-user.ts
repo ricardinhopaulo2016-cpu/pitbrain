@@ -1,6 +1,7 @@
+import { NextResponse } from 'next/server'
 import type { User } from '@supabase/supabase-js'
 import { getSupabaseServerClient } from '@/lib/supabase-server'
-import { getSupabaseAdminClient } from '@/lib/supabase'
+import { getSupabaseAdminClient, isSupabaseConfigured } from '@/lib/supabase'
 import { isEmailAllowed } from '@/lib/auth/allowed-emails'
 
 export class AuthRequiredError extends Error {
@@ -38,6 +39,24 @@ export async function requireUser(): Promise<User> {
   const user = await getCurrentUser()
   if (!user) throw new AuthRequiredError()
   return user
+}
+
+/**
+ * API-route guard for endpoints that work in both storage modes: a no-op (null) in
+ * local mode (no login exists to require), a ready-to-return 401 JSON response when
+ * Supabase is configured but the caller has no authorized session.
+ *
+ * Usage: `const denied = await guardAuthorizedAccess(); if (denied) return denied`
+ */
+export async function guardAuthorizedAccess(): Promise<NextResponse | null> {
+  if (!isSupabaseConfigured()) return null
+
+  const user = await getCurrentUser()
+  if (!user) {
+    return NextResponse.json({ error: 'Faça login para continuar.' }, { status: 401 })
+  }
+
+  return null
 }
 
 /** The current user's active workspace id, or null. */
