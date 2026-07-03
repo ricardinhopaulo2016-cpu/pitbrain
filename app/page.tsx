@@ -10,17 +10,19 @@ import {
   Upload,
   BarChart2,
   Brain,
-  FileText,
+  RefreshCw,
+  EyeOff,
   CheckCircle2,
   Activity,
   LogIn,
 } from 'lucide-react'
 
 const featureList = [
-  { icon: Upload,    label: 'Upload Meta Ads + UTMify'           },
+  { icon: Upload,    label: 'Upload UTMify'                      },
   { icon: BarChart2, label: 'Métricas calculadas, sem achismos'  },
-  { icon: Brain,     label: 'Diagnóstico estruturado por IA'     },
-  { icon: FileText,  label: 'Rascunhos de campanha pós-análise'  },
+  { icon: RefreshCw, label: 'Meta Sync read-only'                },
+  { icon: Brain,     label: 'Diagnóstico local'                  },
+  { icon: EyeOff,    label: 'Dark Posts'                         },
 ]
 
 const steps = [
@@ -73,7 +75,7 @@ export default async function HomePage() {
             {/* Body copy */}
             <p className="text-sm text-pb-muted/80 leading-relaxed max-w-sm">
               Importe dados, valide métricas e detecte gargalos antes de escalar.
-              Diagnóstico estruturado por IA — sem tocar nas suas campanhas.
+              Diagnóstico local — sem tocar nas suas campanhas.
             </p>
 
             {/* CTAs */}
