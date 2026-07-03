@@ -3,7 +3,7 @@
 // (they used to define GLOBAL_TIMEOUT_MS independently).
 
 /** Global sync timeout — aborts the whole structure sync past this point. */
-export const GLOBAL_TIMEOUT_MS = 90_000
+export const GLOBAL_TIMEOUT_MS = 120_000
 
 /** Delay between serial iterations of the adsets/ads fetch loops (one campaign/adset per iteration). */
 export const META_SYNC_REQUEST_DELAY_MS = Number(process.env.META_SYNC_REQUEST_DELAY_MS) || 1200

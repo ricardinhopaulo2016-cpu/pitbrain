@@ -58,6 +58,7 @@ interface StreamEvent {
   actions?: string[]
   partial?: Partial<MetaSyncCounts>
   currentItem?: { index: number; total: number; name: string }
+  debug?: { endpoint?: string; callsMade?: number }
 }
 
 export default function MetaSyncPage() {
@@ -93,6 +94,7 @@ export default function MetaSyncPage() {
   const [syncStartedAt, setSyncStartedAt] = useState<number | null>(null)
   const [syncFinishedAt, setSyncFinishedAt] = useState<number | null>(null)
   const [stuckSeconds, setStuckSeconds] = useState(0)
+  const [syncDebug, setSyncDebug] = useState<{ endpoint?: string; callsMade?: number }>({})
   const lastEventAtRef = useRef<number>(Date.now())
 
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -276,6 +278,7 @@ export default function MetaSyncPage() {
     setSyncStartedAt(Date.now())
     setSyncFinishedAt(null)
     setStuckSeconds(0)
+    setSyncDebug({})
     lastEventAtRef.current = Date.now()
     pushDebugEvent('Validando token e iniciando sync')
 
@@ -285,6 +288,7 @@ export default function MetaSyncPage() {
     // Local, not React state — `runSync` is one closure per click, so this reads the true current
     // stage at cancel/error time instead of a stale value captured when the closure was created.
     let currentStage: MetaSyncStage = 'campaigns'
+    const syncTypeForStorage = scope.includeAdsets ? 'structure_full' : 'dark_posts_fast'
 
     try {
       const res = await fetch('/api/meta/sync', {
@@ -332,6 +336,7 @@ export default function MetaSyncPage() {
             setStuckSeconds(0)
             currentStage = event.stage
             setSyncPhase(event.stage)
+            if (event.debug) setSyncDebug(event.debug)
             if (event.currentItem) {
               setCurrentItem(event.currentItem)
               pushDebugEvent(`${STAGE_LABELS[event.stage] ?? event.stage} — campanha ${event.currentItem.index}/${event.currentItem.total}: ${event.currentItem.name}`)
@@ -372,6 +377,7 @@ export default function MetaSyncPage() {
         persistPartialMetaSyncResult({
           adAccountId: selectedAccountId,
           syncedAt: new Date().toISOString(),
+          syncType: syncTypeForStorage,
           campaigns: accumulated.campaigns,
           adsets: accumulated.adsets,
           ads: accumulated.ads,
@@ -385,7 +391,7 @@ export default function MetaSyncPage() {
       if (finalResult) {
         if (finalResult.emptyReason) setEmptyReason(finalResult.emptyReason)
         if (finalResult.warnings) setSyncWarnings(finalResult.warnings)
-        persistMetaSyncResult(finalResult)
+        persistMetaSyncResult({ ...finalResult, syncType: syncTypeForStorage })
         setLastSync(getLastMetaSync(selectedAccountId))
         setSyncPhase('done')
         setSyncFinishedAt(Date.now())
@@ -424,6 +430,7 @@ export default function MetaSyncPage() {
       persistPartialMetaSyncResult({
         adAccountId: selectedAccountId,
         syncedAt: new Date().toISOString(),
+        syncType: syncTypeForStorage,
         campaigns: accumulated.campaigns,
         adsets: accumulated.adsets,
         ads: accumulated.ads,
@@ -543,7 +550,8 @@ export default function MetaSyncPage() {
         <EyeOff className="h-4 w-4 text-pb-blue shrink-0" />
         <p className="text-sm text-pb-text">
           <span className="font-semibold">Modo leitura.</span> Nenhuma campanha será criada, editada ou publicada.
-          Modo recomendado: estrutura sem insights.
+          Modo recomendado: Dark Posts Fast (sem conjuntos, sem insights) — puxa anúncios, criativos e Post IDs
+          com menos chamadas.
         </p>
       </div>
 
@@ -708,7 +716,15 @@ export default function MetaSyncPage() {
                     {preset.label}
                     {preset.needsConfirmation && <span className="ml-1.5 text-[10px] text-pb-yellow font-normal">(confirma)</span>}
                   </span>
-                  <span className="block text-[11px] text-pb-muted mt-0.5">{preset.description}</span>
+                  <span
+                    className={cn(
+                      'inline-block text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded mt-1',
+                      preset.syncType === 'dark_posts_fast' ? 'text-pb-green bg-pb-green/10' : 'text-pb-blue bg-pb-blue/10'
+                    )}
+                  >
+                    {preset.syncType === 'dark_posts_fast' ? 'Dark Posts Fast' : 'Structure Full'}
+                  </span>
+                  <span className="block text-[11px] text-pb-muted mt-1">{preset.description}</span>
                 </button>
               ))}
             </div>
@@ -774,6 +790,22 @@ export default function MetaSyncPage() {
           <label className="flex items-start gap-2.5 cursor-pointer">
             <input
               type="checkbox"
+              checked={scope.includeAdsets ?? false}
+              disabled={syncing}
+              onChange={e => updateScope({ includeAdsets: e.target.checked })}
+              className="mt-0.5 accent-pb-purple"
+            />
+            <span>
+              <span className="block text-sm text-pb-text">Buscar conjuntos/adsets como enriquecimento</span>
+              <span className="block text-xs text-pb-muted">
+                Desligado para reduzir chamadas. O Pitbrain consegue extrair Dark Posts usando anúncios + criativos.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
               checked={forceRefreshCreatives}
               disabled={syncing}
               onChange={e => setForceRefreshCreatives(e.target.checked)}
@@ -807,7 +839,7 @@ export default function MetaSyncPage() {
           {showConfirm && (
             <div className="rounded-lg px-3.5 py-3 space-y-2.5" style={{ background: 'rgba(250, 204, 21, 0.08)', border: '1px solid rgba(250, 204, 21, 0.3)' }}>
               <p className="text-xs text-pb-text font-medium">
-                Esse sync pode bater limite da Meta. Recomendado usar Structure Sync sem insights, com escopo menor.
+                Esse sync pode bater limite da Meta. Recomendado usar o preset Seguro (Dark Posts Fast), com escopo menor.
               </p>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -932,9 +964,18 @@ export default function MetaSyncPage() {
             <div className="px-4 py-4 space-y-3 text-xs text-pb-muted bg-pb-card-alt">
               <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1">
                 <p><span className="text-pb-text font-medium">adAccountId:</span> {selectedAccountId || '—'}</p>
+                <p><span className="text-pb-text font-medium">syncType:</span> {plan?.syncType === 'structure_full' ? 'structure_full' : 'dark_posts_fast'}</p>
                 <p><span className="text-pb-text font-medium">Etapa:</span> {STAGE_LABELS[syncPhase]}</p>
                 {currentItem && (
                   <p><span className="text-pb-text font-medium">Campanha atual:</span> {currentItem.index}/{currentItem.total} — {currentItem.name}</p>
+                )}
+                <p><span className="text-pb-text font-medium">Endpoint atual:</span> {syncDebug.endpoint ?? '—'}</p>
+                <p><span className="text-pb-text font-medium">Chamadas feitas:</span> {syncDebug.callsMade ?? 0}</p>
+                {plan && syncDebug.callsMade !== undefined && (
+                  <p>
+                    <span className="text-pb-text font-medium">Estimativa restante:</span>{' '}
+                    ~{Math.max(0, plan.estimatedRequests - syncDebug.callsMade)}
+                  </p>
                 )}
                 <p><span className="text-pb-text font-medium">Início:</span> {syncStartedAt ? new Date(syncStartedAt).toLocaleTimeString('pt-BR') : '—'}</p>
                 <p><span className="text-pb-text font-medium">Fim:</span> {syncFinishedAt ? new Date(syncFinishedAt).toLocaleTimeString('pt-BR') : '—'}</p>

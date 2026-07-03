@@ -100,11 +100,20 @@ export interface MetaSyncErrorInfo {
   actions?: string[]
 }
 
+/** Optional call-site diagnostics (which stage/endpoint/how many calls) surfaced in error messages
+ * so a rate limit or stall points at exactly where it happened, not just "something went wrong." */
+export interface MetaSyncDebugInfo {
+  stage?: string
+  endpoint?: string
+  callsMade?: number
+}
+
 /** Friendly PT-BR title/message/actions for the sync error card — shared between the stream route and any future non-streaming caller. */
 export function buildMetaSyncErrorInfo(
   err: unknown,
   abortReason?: 'timeout' | 'cancelled' | 'stalled',
-  stalledStage?: string
+  stalledStage?: string,
+  debugInfo?: MetaSyncDebugInfo
 ): MetaSyncErrorInfo {
   if (abortReason === 'cancelled') {
     return { kind: 'cancelled', title: 'Sync cancelado', message: 'Sync cancelado pelo usuário.' }
@@ -126,10 +135,17 @@ export function buildMetaSyncErrorInfo(
     }
   }
   if (isMetaRateLimitError(err)) {
+    const location = [
+      debugInfo?.stage && `durante: ${debugInfo.stage}`,
+      debugInfo?.endpoint && `Endpoint: ${debugInfo.endpoint}`,
+      debugInfo?.callsMade !== undefined && `Chamadas feitas: ${debugInfo.callsMade}`,
+    ]
+      .filter(Boolean)
+      .join('. ')
     return {
       kind: 'rate_limit',
       title: 'Limite temporário da Meta atingido',
-      message: 'A Meta recusou novas chamadas por excesso de requisições. Aguarde 30–60 minutos ou reduza o escopo do sync.',
+      message: `A Meta recusou novas chamadas por excesso de requisições${location ? ` (Rate limit ${location})` : ''}. Aguarde 30–60 minutos ou reduza o escopo do sync.`,
       actions: ['Tentar novamente depois', 'Reduzir escopo', 'Usar último sync válido'],
     }
   }

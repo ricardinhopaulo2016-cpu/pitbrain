@@ -5,16 +5,23 @@ import { PageShell } from '@/components/layout/PageShell'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { EyeOff, ExternalLink, Plus } from 'lucide-react'
-import { loadMetaDarkPosts } from '@/lib/meta/meta-storage'
+import { loadMetaDarkPosts, getLastMetaSync, type StoredMetaSync } from '@/lib/meta/meta-storage'
 import { parseAdName } from '@/lib/parsers/nomenclature-parser'
 import type { MetaDarkPostAsset } from '@/lib/meta/meta-types'
 import { cn } from '@/lib/utils'
 
+const SYNC_TYPE_LABELS: Record<string, string> = {
+  dark_posts_fast: 'Dark Posts Fast',
+  structure_full: 'Structure Full',
+}
+
 export default function DarkPostsPage() {
   const [darkPosts, setDarkPosts] = useState<MetaDarkPostAsset[]>([])
+  const [lastSync, setLastSync] = useState<StoredMetaSync | null>(null)
 
   useEffect(() => {
     setDarkPosts(loadMetaDarkPosts())
+    setLastSync(getLastMetaSync())
   }, [])
 
   return (
@@ -30,6 +37,22 @@ export default function DarkPostsPage() {
           Post IDs e Story IDs extraídos no último <span className="font-semibold">Meta Sync</span>. Somente leitura — nenhum criativo é alterado aqui.
         </p>
       </div>
+
+      {lastSync && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl px-4 py-2.5 text-xs text-pb-muted" style={{ background: 'rgba(148, 163, 184, 0.05)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+          <span><span className="text-pb-text font-medium">Tipo:</span> {lastSync.syncType ? SYNC_TYPE_LABELS[lastSync.syncType] ?? lastSync.syncType : '—'}</span>
+          <span><span className="text-pb-text font-medium">Sincronizado em:</span> {new Date(lastSync.syncedAt).toLocaleString('pt-BR')}</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-pb-text font-medium">Status:</span>
+            <span className={cn(
+              'text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded',
+              lastSync.status === 'incomplete' ? 'text-pb-yellow bg-pb-yellow/10' : 'text-pb-green bg-pb-green/10'
+            )}>
+              {lastSync.status === 'incomplete' ? 'incompleto' : 'completo'}
+            </span>
+          </span>
+        </div>
+      )}
 
       {darkPosts.length === 0 ? (
         <div className="bg-pb-card border border-pb-border rounded-xl p-8 text-center">

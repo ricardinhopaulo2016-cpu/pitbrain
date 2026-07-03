@@ -25,6 +25,7 @@ function parseScope(input: unknown): MetaSyncScope {
     campaignLimit: Number.isFinite(body.campaignLimit) ? Number(body.campaignLimit) : DEFAULT_SYNC_SCOPE.campaignLimit,
     adLimit: Number.isFinite(body.adLimit) ? Number(body.adLimit) : DEFAULT_SYNC_SCOPE.adLimit,
     nameContains: typeof body.nameContains === 'string' ? body.nameContains : undefined,
+    includeAdsets: typeof body.includeAdsets === 'boolean' ? body.includeAdsets : DEFAULT_SYNC_SCOPE.includeAdsets,
   }
 }
 
@@ -197,9 +198,16 @@ export async function POST(req: NextRequest) {
   // into every paginate() page) and on every stage-boundary progress event — the watchdog below
   // treats a long enough silence on this timestamp as a stall, regardless of *why* nothing moved
   // (stuck Meta pagination, a hung Supabase checkpoint call before its own timeout fires, etc).
+  // Also doubles as call-count/endpoint diagnostics for the debug panel and rate-limit messages.
   let lastHeartbeatAt = Date.now()
-  function touchHeartbeat() {
+  let lastEndpoint: string | undefined
+  let callsMade = 0
+  function touchHeartbeat(path?: string) {
     lastHeartbeatAt = Date.now()
+    if (path) {
+      lastEndpoint = path
+      callsMade++
+    }
   }
 
   const stream = new ReadableStream({
@@ -240,7 +248,11 @@ export async function POST(req: NextRequest) {
         // force the response closed regardless — this is what makes "never hangs indefinitely" an
         // actual guarantee instead of "hangs until every downstream call happens to be abort-aware."
         await new Promise(resolve => setTimeout(resolve, STALL_FORCE_CLOSE_GRACE_MS))
-        const info = buildMetaSyncErrorInfo(new SyncAbortedError('stalled'), 'stalled', lastStage)
+        const info = buildMetaSyncErrorInfo(new SyncAbortedError('stalled'), 'stalled', lastStage, {
+          stage: lastStage,
+          endpoint: lastEndpoint,
+          callsMade,
+        })
         if (dev) console.error('[pitbrain:meta:sync] sync travado', adAccountId, lastStage)
         send({ type: 'error', ...info, partial: lastCounts })
         await checkpoint('incomplete', accumulated, lastCounts, info.message)
@@ -262,7 +274,7 @@ export async function POST(req: NextRequest) {
           lastCounts = { ...lastCounts, ...step.value.counts }
           lastStage = step.value.stage
           touchHeartbeat()
-          send(step.value)
+          send({ ...step.value, debug: { endpoint: lastEndpoint, callsMade } })
           if (step.value.data) {
             Object.assign(accumulated, step.value.data)
             await checkpoint('in_progress', accumulated, lastCounts)
@@ -275,7 +287,7 @@ export async function POST(req: NextRequest) {
       } catch (err) {
         if (!claim()) return
         clearInterval(watchdog)
-        const info = buildMetaSyncErrorInfo(err, abortReason, lastStage)
+        const info = buildMetaSyncErrorInfo(err, abortReason, lastStage, { stage: lastStage, endpoint: lastEndpoint, callsMade })
         if (dev) console.error('[pitbrain:meta:sync] erro', adAccountId, info.kind, info.message)
         send({ type: 'error', ...info, partial: lastCounts })
         const status: CheckpointStatus =

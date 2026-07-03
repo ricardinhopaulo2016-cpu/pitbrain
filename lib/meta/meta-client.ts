@@ -92,7 +92,12 @@ export class MetaClient {
     return warnings
   }
 
-  private async requestJson<T>(url: URL, externalSignal?: AbortSignal, onRequest?: () => void): Promise<T> {
+  private async requestJson<T>(
+    url: URL,
+    externalSignal?: AbortSignal,
+    onRequest?: (path?: string) => void,
+    endpointLabel?: string
+  ): Promise<T> {
     await this.throttle()
 
     if (externalSignal?.aborted) {
@@ -101,8 +106,10 @@ export class MetaClient {
 
     // Fires once per real attempt (including every page of a paginate() call) — lets the sync
     // route's stall watchdog know a request is actually in flight, distinct from the sync being
-    // stuck waiting on something that never touches the Meta API at all.
-    onRequest?.()
+    // stuck waiting on something that never touches the Meta API at all. `endpointLabel` is the
+    // original relative path (stable across pagination, unlike the ever-changing `paging.next`
+    // URL) — used for rate-limit/debug diagnostics ("which endpoint were we calling").
+    onRequest?.(endpointLabel)
 
     if (process.env.NODE_ENV === 'development') {
       const redacted = new URL(url.toString())
@@ -153,35 +160,38 @@ export class MetaClient {
     path: string,
     params: Record<string, string | number | undefined> = {},
     signal?: AbortSignal,
-    onRequest?: () => void
+    onRequest?: (path?: string) => void
   ): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`)
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
     }
     url.searchParams.set('access_token', this.accessToken)
-    return this.requestJson<T>(url, signal, onRequest)
+    return this.requestJson<T>(url, signal, onRequest, path)
   }
 
   /**
    * GET all pages for a list endpoint, following `paging.next` until exhausted, maxPages is hit,
-   * or the same `paging.next` URL repeats (a real Graph API quirk where a "last" page still hands
-   * back a next link) — both of the latter two stop the loop and record a debug warning instead of
-   * looping/burning through the full maxPages budget silently.
+   * the same `paging.next` URL repeats (a real Graph API quirk where a "last" page still hands back
+   * a next link), or two consecutive pages come back empty while still claiming a next link (seen
+   * on some accounts near the end of a result set) — all three stop the loop and record a debug
+   * warning instead of looping/burning through the full maxPages budget silently.
    */
   async paginate<T = unknown>(
     path: string,
     params: Record<string, string | number | undefined> = {},
     maxPages = 10,
     signal?: AbortSignal,
-    onRequest?: () => void
+    onRequest?: (path?: string) => void
   ): Promise<T[]> {
     const dev = process.env.NODE_ENV === 'development'
     const visitedNextUrls = new Set<string>()
     const results: T[] = []
+    let consecutiveEmptyPages = 0
 
     let page = await this.get<MetaListResponse<T>>(path, params, signal, onRequest)
     results.push(...(page.data ?? []))
+    consecutiveEmptyPages = (page.data?.length ?? 0) === 0 ? 1 : 0
     let pageCount = 1
     if (dev) {
       console.log(
@@ -198,13 +208,20 @@ export class MetaClient {
       }
       visitedNextUrls.add(nextUrl)
 
-      page = await this.requestJson<MetaListResponse<T>>(new URL(nextUrl), signal, onRequest)
+      page = await this.requestJson<MetaListResponse<T>>(new URL(nextUrl), signal, onRequest, path)
       results.push(...(page.data ?? []))
       pageCount++
+      const itemsThisPage = page.data?.length ?? 0
+      consecutiveEmptyPages = itemsThisPage === 0 ? consecutiveEmptyPages + 1 : 0
       if (dev) {
         console.log(
-          `[pitbrain:meta-client] paginate ${path} page=${pageCount} items=${page.data?.length ?? 0} total=${results.length} hasNext=${Boolean(page.paging?.next)} nextUrlRepeated=false`
+          `[pitbrain:meta-client] paginate ${path} page=${pageCount} items=${itemsThisPage} total=${results.length} hasNext=${Boolean(page.paging?.next)} nextUrlRepeated=false`
         )
+      }
+      if (consecutiveEmptyPages >= 2) {
+        this.lastWarnings.push('Páginas vazias consecutivas — parando paginação.')
+        if (dev) console.log(`[pitbrain:meta-client] paginate ${path} — 2 consecutive empty pages, stopping`)
+        break
       }
     }
 

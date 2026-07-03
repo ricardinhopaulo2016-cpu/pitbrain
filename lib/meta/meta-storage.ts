@@ -11,6 +11,8 @@ const META_SELECTED_AD_ACCOUNT_KEY = 'pitbrain:metaSelectedAdAccountId'
 export interface StoredMetaSync {
   adAccountId: string
   syncedAt: string
+  syncType?: 'dark_posts_fast' | 'structure_full'
+  status?: 'completed' | 'incomplete'
   counts: {
     campaigns: number
     adsets: number
@@ -110,6 +112,8 @@ export function setSelectedAdAccountId(id: string | null): void {
 interface MetaSyncResultLike {
   adAccountId: string
   syncedAt: string
+  syncType?: StoredMetaSync['syncType']
+  status?: StoredMetaSync['status']
   campaigns?: MetaCampaign[]
   adsets?: MetaAdset[]
   ads?: MetaAd[]
@@ -122,13 +126,14 @@ const EMPTY_SYNC_COUNTS: StoredMetaSync['counts'] = { campaigns: 0, adsets: 0, a
 export function persistMetaSyncResult(result: {
   adAccountId: string
   syncedAt: string
+  syncType?: StoredMetaSync['syncType']
   campaigns: MetaCampaign[]
   adsets: MetaAdset[]
   ads: MetaAd[]
   darkPosts: MetaDarkPostAsset[]
   counts: StoredMetaSync['counts']
 }): void {
-  persistPartialMetaSyncResult(result)
+  persistPartialMetaSyncResult({ ...result, status: 'completed' })
 }
 
 /** Same as `persistMetaSyncResult`, but every array/counts field is optional — call this from an abort/error path with whatever was collected so far. */
@@ -138,8 +143,9 @@ export function persistPartialMetaSyncResult(result: MetaSyncResultLike): void {
   const ads = result.ads ?? []
   const darkPosts = result.darkPosts ?? []
   const counts = { ...EMPTY_SYNC_COUNTS, ...result.counts }
+  const status = result.status ?? 'incomplete'
 
-  saveMetaSync({ adAccountId: result.adAccountId, syncedAt: result.syncedAt, counts })
+  saveMetaSync({ adAccountId: result.adAccountId, syncedAt: result.syncedAt, syncType: result.syncType, status, counts })
   if (darkPosts.length > 0) saveMetaDarkPosts(result.adAccountId, darkPosts)
   if (campaigns.length > 0 || adsets.length > 0 || ads.length > 0) {
     saveMetaCampaignStructure({ adAccountId: result.adAccountId, syncedAt: result.syncedAt, campaigns, adsets, ads })

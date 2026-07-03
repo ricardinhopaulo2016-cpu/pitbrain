@@ -64,7 +64,7 @@ export async function listAdAccounts(): Promise<MetaAdAccount[]> {
 export async function getCampaigns(
   adAccountId: string,
   signal?: AbortSignal,
-  onHeartbeat?: () => void
+  onHeartbeat?: (path?: string) => void
 ): Promise<MetaCampaign[]> {
   const client = getMetaClient()
   const raw = await client.paginate<MetaRawCampaign>(
@@ -81,7 +81,7 @@ export async function getAdsets(
   adAccountId: string,
   campaignId?: string,
   signal?: AbortSignal,
-  onHeartbeat?: () => void,
+  onHeartbeat?: (path?: string) => void,
   maxPages = 10
 ): Promise<MetaAdset[]> {
   const client = getMetaClient()
@@ -95,7 +95,7 @@ export async function getAds(
   campaignId?: string,
   adsetId?: string,
   signal?: AbortSignal,
-  onHeartbeat?: () => void,
+  onHeartbeat?: (path?: string) => void,
   maxPages = 10
 ): Promise<MetaAd[]> {
   const client = getMetaClient()
@@ -136,7 +136,7 @@ async function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
  * rate-limit backoff sleep (60s, longer than the 45s stage watchdog) would make the watchdog wrongly
  * abort the sync as "stalled" while it's just waiting out the intended single retry.
  */
-async function sleepWithHeartbeat(ms: number, signal: AbortSignal, onHeartbeat?: () => void): Promise<void> {
+async function sleepWithHeartbeat(ms: number, signal: AbortSignal, onHeartbeat?: (path?: string) => void): Promise<void> {
   let remaining = ms
   while (remaining > 0 && !signal.aborted) {
     const tick = Math.min(HEARTBEAT_TICK_MS, remaining)
@@ -188,7 +188,7 @@ async function withRateLimitBackoff<T>(
   op: () => Promise<T>,
   retryState: RateLimitRetryState,
   signal: AbortSignal,
-  onHeartbeat?: () => void
+  onHeartbeat?: (path?: string) => void
 ): Promise<T> {
   try {
     return await op()
@@ -221,7 +221,7 @@ export type CreativeFetcher = (
   creativeIds: string[],
   signal: AbortSignal,
   retryState: RateLimitRetryState,
-  onHeartbeat?: () => void
+  onHeartbeat?: (path?: string) => void
 ) => AsyncGenerator<number, MetaCreative[], void>
 
 /**
@@ -235,7 +235,7 @@ export async function* fetchCreativesSerial(
   creativeIds: string[],
   signal: AbortSignal,
   retryState: RateLimitRetryState,
-  onHeartbeat?: () => void
+  onHeartbeat?: (path?: string) => void
 ): AsyncGenerator<number, MetaCreative[], void> {
   const unique = Array.from(new Set(creativeIds))
   if (unique.length === 0) return []
@@ -323,12 +323,18 @@ export interface MetaSyncScope {
   campaignLimit: number
   adLimit: number
   nameContains?: string
+  /** Whether to fetch adsets at all — false (the default) is "Dark Posts Fast": ads are fetched
+   * directly per campaign instead, since dark post extraction only needs ads + creatives. Turning
+   * this on ("Buscar conjuntos como enriquecimento") switches to the full per-adset ads fetch, at
+   * the cost of the extra adsets requests. */
+  includeAdsets?: boolean
 }
 
 export const DEFAULT_SYNC_SCOPE: MetaSyncScope = {
   status: 'active',
   campaignLimit: 10,
   adLimit: 50,
+  includeAdsets: false,
 }
 
 export type MetaSyncStage = 'campaigns' | 'adsets' | 'ads' | 'creatives' | 'dark_posts' | 'done'
@@ -373,7 +379,7 @@ export interface RunMetaSyncDeps {
   /** Called on every real Meta request attempt (including each page of a paginate() call) and at
    * every stage-boundary yield — lets the caller's stall watchdog tell "still working" apart from
    * "truly stuck," at a finer grain than the per-campaign/per-adset progress events alone give. */
-  onHeartbeat?: () => void
+  onHeartbeat?: (path?: string) => void
 }
 
 /**
@@ -442,87 +448,94 @@ export async function* runMetaSync(
     }
   }
 
-  // ── Adsets (serial — one request per campaign, spaced by META_SYNC_REQUEST_DELAY_MS, each call
-  // bounded by ADSET_PER_CAMPAIGN_TIMEOUT_MS so one slow/looping campaign can't stall the whole
-  // stage — it's skipped and the sync moves on instead) ──
-  log('etapa: conjuntos')
-  // Emitted immediately, before the first (possibly slow) getAdsets() call — otherwise the client
-  // shows nothing between the campaigns event and however long campaign[0]'s adsets fetch takes,
-  // which is exactly what made a slow/looping first fetch look like a stuck "Buscando campanhas."
-  yield { type: 'progress', stage: 'adsets', counts: { adsets: 0 } }
+  // ── Adsets (optional — only attempted when scope.includeAdsets is true; skipped entirely
+  // otherwise, which is the default "Dark Posts Fast" mode, since dark post extraction only needs
+  // ads + creatives, not adset details. When attempted: serial, one request per campaign, spaced by
+  // META_SYNC_REQUEST_DELAY_MS, each call bounded by ADSET_PER_CAMPAIGN_TIMEOUT_MS so one
+  // slow/looping campaign can't stall the whole stage — it's skipped and the sync moves on) ──
   const adsets: MetaAdset[] = []
-  const failedAdsetCampaignIds: string[] = []
-  for (let i = 0; i < campaigns.length; i++) {
-    checkAbort()
-    const c = campaigns[i]
-    yield {
-      type: 'progress',
-      stage: 'adsets',
-      counts: { adsets: counts.adsets },
-      currentItem: { index: i + 1, total: campaigns.length, name: c.name },
-    }
-    try {
-      const batch = await withRateLimitBackoff(
-        () =>
-          withPerCallTimeout(
-            sig => getAdsets(adAccountId, c.id, sig, deps.onHeartbeat, ADSET_MAX_PAGES_PER_CAMPAIGN),
-            signal,
-            ADSET_PER_CAMPAIGN_TIMEOUT_MS
-          ),
-        retryState,
-        signal,
-        deps.onHeartbeat
-      )
-      adsets.push(...(scope.status === 'active' ? batch.filter(isActive) : batch))
-    } catch (err) {
-      // A real sync-level abort (cancel/global-timeout/stall-watchdog — checked via the OUTER
-      // `signal`, not the per-call one, since both surface as the same abort error otherwise) or an
-      // account/token-wide condition (rate limit, dead token, missing permission) isn't specific to
-      // this campaign and must propagate. Do not simplify this to `err instanceof SyncAbortedError`
-      // — a real outer abort during this call surfaces as a plain MetaAPIError(499), not that type.
-      if (signal.aborted || isMetaRateLimitError(err) || isMetaTokenError(err) || isMetaPermissionError(err)) throw err
-      failedAdsetCampaignIds.push(c.id)
-      log('timeout/erro ao buscar adsets da campanha', c.id, c.name, err instanceof Error ? err.message : err)
-    }
-    counts.adsets = adsets.length
-    yield { type: 'progress', stage: 'adsets', counts: { adsets: counts.adsets } }
-    if (i < campaigns.length - 1) await sleepAbortable(META_SYNC_REQUEST_DELAY_MS, signal)
-  }
-
   const adsetWarnings: string[] = []
-  if (failedAdsetCampaignIds.length > 0) {
-    for (const id of failedAdsetCampaignIds) {
-      const name = campaigns.find(c => c.id === id)?.name ?? id
-      adsetWarnings.push(`Timeout ao buscar conjuntos da campanha ${name}.`)
-    }
-    // One account-wide fallback call, bounded on its own, to try to recover adsets for whichever
-    // campaigns failed above — a single call is cheaper and safer than retrying them one by one.
-    try {
+  if (scope.includeAdsets) {
+    log('etapa: conjuntos')
+    // Emitted immediately, before the first (possibly slow) getAdsets() call — otherwise the client
+    // shows nothing between the campaigns event and however long campaign[0]'s adsets fetch takes,
+    // which is exactly what made a slow/looping first fetch look like a stuck "Buscando campanhas."
+    yield { type: 'progress', stage: 'adsets', counts: { adsets: 0 } }
+    const failedAdsetCampaignIds: string[] = []
+    for (let i = 0; i < campaigns.length; i++) {
       checkAbort()
-      const accountAdsets = await withPerCallTimeout(
-        sig => getAdsets(adAccountId, undefined, sig, deps.onHeartbeat, ADSET_ACCOUNT_FALLBACK_MAX_PAGES),
-        signal,
-        ADSET_ACCOUNT_FALLBACK_TIMEOUT_MS
-      )
-      const failedSet = new Set(failedAdsetCampaignIds)
-      const recovered = accountAdsets.filter(a => failedSet.has(a.campaignId))
-      const activeFiltered = scope.status === 'active' ? recovered.filter(isActive) : recovered
-      const existingIds = new Set(adsets.map(a => a.id))
-      for (const a of activeFiltered) {
-        if (!existingIds.has(a.id)) {
-          adsets.push(a)
-          existingIds.add(a.id)
-        }
+      const c = campaigns[i]
+      yield {
+        type: 'progress',
+        stage: 'adsets',
+        counts: { adsets: counts.adsets },
+        currentItem: { index: i + 1, total: campaigns.length, name: c.name },
+      }
+      try {
+        const batch = await withRateLimitBackoff(
+          () =>
+            withPerCallTimeout(
+              sig => getAdsets(adAccountId, c.id, sig, deps.onHeartbeat, ADSET_MAX_PAGES_PER_CAMPAIGN),
+              signal,
+              ADSET_PER_CAMPAIGN_TIMEOUT_MS
+            ),
+          retryState,
+          signal,
+          deps.onHeartbeat
+        )
+        adsets.push(...(scope.status === 'active' ? batch.filter(isActive) : batch))
+      } catch (err) {
+        // A real sync-level abort (cancel/global-timeout/stall-watchdog — checked via the OUTER
+        // `signal`, not the per-call one, since both surface as the same abort error otherwise) or an
+        // account/token-wide condition (rate limit, dead token, missing permission) isn't specific to
+        // this campaign and must propagate. Do not simplify this to `err instanceof SyncAbortedError`
+        // — a real outer abort during this call surfaces as a plain MetaAPIError(499), not that type.
+        if (signal.aborted || isMetaRateLimitError(err) || isMetaTokenError(err) || isMetaPermissionError(err)) throw err
+        failedAdsetCampaignIds.push(c.id)
+        log('timeout/erro ao buscar adsets da campanha', c.id, c.name, err instanceof Error ? err.message : err)
       }
       counts.adsets = adsets.length
       yield { type: 'progress', stage: 'adsets', counts: { adsets: counts.adsets } }
-    } catch (err) {
-      if (signal.aborted) throw err
-      log('fallback by-account de adsets também falhou', err instanceof Error ? err.message : err)
+      if (i < campaigns.length - 1) await sleepAbortable(META_SYNC_REQUEST_DELAY_MS, signal)
     }
+
+    if (failedAdsetCampaignIds.length > 0) {
+      for (const id of failedAdsetCampaignIds) {
+        const name = campaigns.find(c => c.id === id)?.name ?? id
+        adsetWarnings.push(`Timeout ao buscar conjuntos da campanha ${name}.`)
+      }
+      // One account-wide fallback call, bounded on its own, to try to recover adsets for whichever
+      // campaigns failed above — a single call is cheaper and safer than retrying them one by one.
+      try {
+        checkAbort()
+        const accountAdsets = await withPerCallTimeout(
+          sig => getAdsets(adAccountId, undefined, sig, deps.onHeartbeat, ADSET_ACCOUNT_FALLBACK_MAX_PAGES),
+          signal,
+          ADSET_ACCOUNT_FALLBACK_TIMEOUT_MS
+        )
+        const failedSet = new Set(failedAdsetCampaignIds)
+        const recovered = accountAdsets.filter(a => failedSet.has(a.campaignId))
+        const activeFiltered = scope.status === 'active' ? recovered.filter(isActive) : recovered
+        const existingIds = new Set(adsets.map(a => a.id))
+        for (const a of activeFiltered) {
+          if (!existingIds.has(a.id)) {
+            adsets.push(a)
+            existingIds.add(a.id)
+          }
+        }
+        counts.adsets = adsets.length
+        yield { type: 'progress', stage: 'adsets', counts: { adsets: counts.adsets } }
+      } catch (err) {
+        if (signal.aborted) throw err
+        log('fallback by-account de adsets também falhou', err instanceof Error ? err.message : err)
+      }
+    }
+    log('conjuntos encontrados', counts.adsets)
+    yield { type: 'progress', stage: 'adsets', counts: { adsets: counts.adsets }, data: { adsets } }
+  } else {
+    log('etapa: conjuntos pulada (Dark Posts Fast — ative "Buscar conjuntos como enriquecimento" pra incluir)')
+    yield { type: 'progress', stage: 'adsets', counts: { adsets: 0 }, data: { adsets: [] } }
   }
-  log('conjuntos encontrados', counts.adsets)
-  yield { type: 'progress', stage: 'adsets', counts: { adsets: counts.adsets }, data: { adsets } }
 
   // ── Ads (serial, bounded by adLimit) ──
   log('etapa: anúncios')
@@ -531,12 +544,14 @@ export async function* runMetaSync(
   const adsWarnings: string[] = [...adsetWarnings]
 
   if (adsets.length === 0 && campaigns.length > 0) {
-    // No adsets at all — every campaign's fetch failed and the account-wide fallback came up empty,
-    // or the account genuinely has none. Fall back to fetching ads directly per campaign so Dark
-    // Posts (which only need ads + creatives) can still be reached, instead of ending the sync
-    // early. Same per-call timeout + skip-and-continue treatment as the adsets loop above, so this
-    // fallback can't reintroduce the same kind of stall one level down.
-    adsWarnings.push('Conjuntos não foram carregados, mas o sync tentou buscar anúncios diretamente pelas campanhas.')
+    // No adsets to iterate — either intentionally skipped (Dark Posts Fast, the default) or every
+    // campaign's adset fetch failed and the account-wide fallback above also came up empty. Either
+    // way, fetch ads directly per campaign so Dark Posts (which only need ads + creatives) can still
+    // be reached, instead of ending the sync early. Same per-call timeout + skip-and-continue
+    // treatment as the adsets loop above, so this path can't reintroduce the same kind of stall.
+    if (scope.includeAdsets) {
+      adsWarnings.push('Conjuntos não foram carregados, mas o sync tentou buscar anúncios diretamente pelas campanhas.')
+    }
     for (let i = 0; i < campaigns.length; i++) {
       if (ads.length >= scope.adLimit) break
       checkAbort()
@@ -682,6 +697,7 @@ export async function syncMetaAccount(adAccountId: string): Promise<SyncMetaAcco
     status: 'all',
     campaignLimit: Number.MAX_SAFE_INTEGER,
     adLimit: Number.MAX_SAFE_INTEGER,
+    includeAdsets: true,
   }
   const controller = new AbortController()
   const gen = runMetaSync(adAccountId, scope, controller.signal)
