@@ -3,20 +3,22 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { PageShell } from '@/components/layout/PageShell'
+import { loadImports as loadLocalImports, pitbrainImportToLastImport } from '@/lib/storage/imports'
 import {
-  loadImports,
-  deleteImportById,
-  renameImportById,
+  listImports,
+  saveImport,
+  deleteImport,
+  updateImport,
   getActiveImportId,
   setActiveImportId,
-  pitbrainImportToLastImport,
-} from '@/lib/storage/imports'
+  getStorageMode,
+} from '@/lib/storage/pitbrain-storage'
 import { saveCurrentDataset } from '@/lib/calculators/local-metrics'
 import { useSessionStore } from '@/store/sessionStore'
 import type { PitbrainImport } from '@/types/pitbrain'
 import {
   Database, Trash2, Edit3, BarChart2, CheckCircle2,
-  Upload, Calendar, Layers, AlertCircle, X, AlertTriangle,
+  Upload, Calendar, Layers, AlertCircle, X, AlertTriangle, CloudUpload, Loader2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -251,41 +253,64 @@ function ImportCard({
 export default function ImportsPage() {
   const [imports, setImports] = useState<PitbrainImport[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [localImportsCount, setLocalImportsCount] = useState(0)
+  const [migrating, setMigrating] = useState(false)
+  const [migrationDone, setMigrationDone] = useState<number | null>(null)
   const { reset: resetSession, setSessionId } = useSessionStore()
   const router = useRouter()
+  const storageMode = getStorageMode()
 
-  const refresh = useCallback(() => {
-    setImports(loadImports())
-    setActiveId(getActiveImportId())
-  }, [])
+  const refresh = useCallback(async () => {
+    const [imps, id] = await Promise.all([listImports(), getActiveImportId()])
+    setImports(imps)
+    setActiveId(id)
+    setLoaded(true)
+    if (storageMode === 'supabase') {
+      setLocalImportsCount(loadLocalImports().length)
+    }
+  }, [storageMode])
 
   useEffect(() => { refresh() }, [refresh])
 
-  function handleLoad(imp: PitbrainImport) {
+  async function handleLoad(imp: PitbrainImport) {
     const lastImport = pitbrainImportToLastImport(imp)
     saveCurrentDataset(lastImport)
-    setActiveImportId(imp.id)
+    await setActiveImportId(imp.id)
     setActiveId(imp.id)
     resetSession()
     setSessionId(`local:${imp.id}`)
     router.push('/dashboard')
   }
 
-  function handleDelete(id: string) {
-    deleteImportById(id)
+  async function handleDelete(id: string) {
+    await deleteImport(id)
     refresh()
   }
 
-  function handleRename(id: string, name: string) {
+  async function handleRename(id: string, name: string) {
     if (!name) return
-    renameImportById(id, name)
+    await updateImport(id, { name })
     refresh()
   }
 
-  function handleClearActive() {
-    setActiveImportId(null)
+  async function handleClearActive() {
+    await setActiveImportId(null)
     setActiveId(null)
     resetSession()
+  }
+
+  async function handleMigrate() {
+    setMigrating(true)
+    const localImports = loadLocalImports()
+    let migrated = 0
+    for (const imp of localImports) {
+      const { storageMode: savedMode } = await saveImport(imp)
+      if (savedMode === 'supabase') migrated++
+    }
+    setMigrating(false)
+    setMigrationDone(migrated)
+    await refresh()
   }
 
   const hasActive = !!activeId && imports.some(i => i.id === activeId)
@@ -297,7 +322,9 @@ export default function ImportsPage() {
         <div>
           <h1 className="text-2xl font-bold text-pb-text">Imports Salvos</h1>
           <p className="text-pb-muted text-sm mt-0.5">
-            {imports.length === 0
+            {!loaded
+              ? 'Carregando...'
+              : imports.length === 0
               ? 'Nenhum import salvo ainda.'
               : `${imports.length} import${imports.length !== 1 ? 's' : ''} · clique em "Carregar na Dashboard" para ativar`
             }
@@ -321,6 +348,44 @@ export default function ImportsPage() {
             Novo import
           </button>
         </div>
+      </div>
+
+      {/* Storage mode banner */}
+      <div
+        className={cn(
+          'flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3',
+          storageMode === 'supabase'
+            ? 'bg-pb-green/[0.06] border border-pb-green/20'
+            : 'bg-pb-purple/[0.06] border border-pb-purple/20'
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <Database className={cn('h-3.5 w-3.5', storageMode === 'supabase' ? 'text-pb-green' : 'text-pb-purple')} />
+          <span className="text-xs text-pb-text font-medium">
+            {storageMode === 'supabase'
+              ? 'Supabase ativo — dados compartilhados no banco.'
+              : 'Modo local — dados apenas neste navegador.'}
+          </span>
+        </div>
+
+        {storageMode === 'supabase' && localImportsCount > 0 && (
+          migrationDone === null ? (
+            <button
+              onClick={handleMigrate}
+              disabled={migrating}
+              className="inline-flex items-center gap-2 bg-pb-green/15 hover:bg-pb-green/25 disabled:opacity-50 text-pb-green font-semibold px-3 py-1.5 rounded-lg text-xs transition-colors border border-pb-green/30"
+            >
+              {migrating
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Migrando…</>
+                : <><CloudUpload className="h-3.5 w-3.5" />Migrar {localImportsCount} import{localImportsCount !== 1 ? 's' : ''} local{localImportsCount !== 1 ? 'is' : ''} para Supabase</>
+              }
+            </button>
+          ) : (
+            <span className="text-[11px] text-pb-green font-medium">
+              Imports locais migrados para Supabase. ({migrationDone})
+            </span>
+          )
+        )}
       </div>
 
       {/* Empty state */}

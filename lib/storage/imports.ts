@@ -130,7 +130,7 @@ export function buildPitbrainImport(opts: {
 }): PitbrainImport {
   const { parseResult, fileName, fileHash, summary, dateRange } = opts
   const now = new Date().toISOString()
-  const id  = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+  const id  = crypto.randomUUID()
   const name = fileName.replace(/\.[^.]+$/, '')
 
   const periodLabel = dateRange ? `${dateRange.start} → ${dateRange.end}` : undefined

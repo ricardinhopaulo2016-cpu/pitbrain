@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseClient } from '@/lib/supabase'
+import { getSupabaseAdminClient } from '@/lib/supabase'
 import { getStorageMode } from '@/lib/storage/mode'
 import type { MetaCampaign } from '@/types/meta'
 import { buildCampaignStructure } from '@/lib/parsers/structure-parser'
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'sessionId é obrigatório.' }, { status: 400 })
   }
 
-  const supabase = getSupabaseClient()
+  const supabase = getSupabaseAdminClient()
   if (!supabase) {
     return NextResponse.json(
       { ok: false, storageMode: getStorageMode(), error: 'Supabase não configurado. Use o modo local.' },

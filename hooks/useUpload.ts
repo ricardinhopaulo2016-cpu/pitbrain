@@ -11,12 +11,8 @@ import {
   addToImportHistory,
   LastImport,
 } from '@/lib/calculators/local-metrics'
-import {
-  saveImportToList,
-  setActiveImportId,
-  buildPitbrainImport,
-} from '@/lib/storage/imports'
-import { getStorageMode } from '@/lib/storage/mode'
+import { buildPitbrainImport } from '@/lib/storage/imports'
+import { saveImport, setActiveImportId, getStorageMode } from '@/lib/storage/pitbrain-storage'
 import type { ImportSession } from '@/types/import'
 import type { UtmifyDailyRow, UtmifySession } from '@/types/utmify'
 
@@ -49,112 +45,88 @@ export function useUpload() {
     setError(null)
     setDuplicateSession(null)
 
-    const form = new FormData()
-    form.append('utmify', utmifyFile)
-
     try {
-      const [apiRes, parseResult] = await Promise.all([
-        fetch('/api/upload', { method: 'POST', body: form }),
-        parseUtmifyFile(utmifyFile).catch(err => {
-          console.error('[pitbrain] Client-side parse failed:', err)
-          return null
-        }),
-      ])
+      const parseResult = await parseUtmifyFile(utmifyFile).catch(err => {
+        console.error('[pitbrain] Client-side parse failed:', err)
+        return null
+      })
 
-      const apiData = await apiRes.json()
-      const isLocalFallback = apiData?.storageMode === 'local'
-
-      // A real API failure — anything other than the expected "no Supabase, use local" response.
-      if (!apiRes.ok && !isLocalFallback) {
-        setError(apiData.error ?? 'Erro desconhecido.')
+      if (!parseResult || parseResult.rows.length === 0) {
+        setError('Não foi possível processar o arquivo. Verifique o formato (CSV, XLSX ou XLS da UTMify).')
         setStatus('error')
         return
       }
 
-      // Hash + duplicate check
-      let fileHash = ''
-      if (parseResult) {
-        fileHash = await generateFileHash(utmifyFile)
+      const fileHash = await generateFileHash(utmifyFile)
 
-        if (!opts.force) {
-          const history = loadImportHistory()
-          const dup = history.find(h => h.fileHash === fileHash)
-          if (dup) {
-            setDuplicateSession(dup)
-            setStatus('duplicate')
-            return
-          }
+      if (!opts.force) {
+        const history = loadImportHistory()
+        const dup = history.find(h => h.fileHash === fileHash)
+        if (dup) {
+          setDuplicateSession(dup)
+          setStatus('duplicate')
+          return
         }
       }
 
-      // Build and save the import (works regardless of Supabase availability)
-      let localImportId: string | null = null
-      if (parseResult && parseResult.rows.length > 0) {
-        const summary   = buildImportSummary(parseResult)
-        const dateRange = extractDateRange(utmifyFile.name, parseResult)
+      const summary   = buildImportSummary(parseResult)
+      const dateRange = extractDateRange(utmifyFile.name, parseResult)
 
-        // Save to new pitbrain:imports list
-        const pitbrainImport = buildPitbrainImport({
-          parseResult,
-          fileName: utmifyFile.name,
-          fileHash,
-          summary,
-          dateRange,
-        })
-        localImportId = pitbrainImport.id
-        saveImportToList(pitbrainImport)
-        setActiveImportId(pitbrainImport.id)
+      const pitbrainImport = buildPitbrainImport({
+        parseResult,
+        fileName: utmifyFile.name,
+        fileHash,
+        summary,
+        dateRange,
+      })
 
-        // Keep pitbrain:currentDataset in sync so useMetrics keeps working
-        const lastImport: LastImport = {
-          sourceType:   parseResult.sourceType,
-          fileName:     utmifyFile.name,
-          importedAt:   pitbrainImport.createdAt,
-          rows:         parseResult.rows as LastImport['rows'],
-          summary,
-          fileHash,
-          importMode:   'replace_current',
-          ...(parseResult.sourceType === 'utmify_utm_breakdown' ? {
-            breakdownLevel:         parseResult.breakdownLevel,
-            dimensionField:         parseResult.dimensionField,
-            dimensionLabel:         parseResult.dimensionLabel,
-            ignoredFooterRowsCount: parseResult.ignoredFooterRowsCount,
-          } : {}),
-        }
-        saveCurrentDataset(lastImport)
+      // Persists to Supabase when configured, falls back to localStorage otherwise
+      const { saved } = await saveImport(pitbrainImport)
+      await setActiveImportId(saved.id)
 
-        // Keep legacy import history for duplicate detection
-        addToImportHistory({
-          id:          pitbrainImport.id,
-          fileName:    utmifyFile.name,
-          fileHash,
-          sourceType:  parseResult.sourceType,
-          importedAt:  pitbrainImport.createdAt,
-          rowCount:    parseResult.rows.length,
-          dateRange:   dateRange,
-          mode:        'replace_current',
-          hasStoredData: true,
-        })
+      // Keep pitbrain:currentDataset in sync so useMetrics keeps working either way
+      const lastImport: LastImport = {
+        sourceType:   parseResult.sourceType,
+        fileName:     utmifyFile.name,
+        importedAt:   saved.createdAt,
+        rows:         parseResult.rows as LastImport['rows'],
+        summary,
+        fileHash,
+        importMode:   'replace_current',
+        ...(parseResult.sourceType === 'utmify_utm_breakdown' ? {
+          breakdownLevel:         parseResult.breakdownLevel,
+          dimensionField:         parseResult.dimensionField,
+          dimensionLabel:         parseResult.dimensionLabel,
+          ignoredFooterRowsCount: parseResult.ignoredFooterRowsCount,
+        } : {}),
       }
+      saveCurrentDataset(lastImport)
+
+      // Keep legacy import history for duplicate detection
+      addToImportHistory({
+        id:          saved.id,
+        fileName:    utmifyFile.name,
+        fileHash,
+        sourceType:  parseResult.sourceType,
+        importedAt:  saved.createdAt,
+        rowCount:    parseResult.rows.length,
+        dateRange:   dateRange,
+        mode:        'replace_current',
+        hasStoredData: true,
+      })
 
       reset()
-      const resolvedSessionId = isLocalFallback && localImportId
-        ? `local:${localImportId}`
-        : apiData.sessionId
-      setSessionId(resolvedSessionId)
-      setResult(
-        isLocalFallback
-          ? {
-              sessionId: resolvedSessionId,
-              metaCount: 0,
-              metaSourceType: null,
-              utmifyCount: parseResult?.rows.length ?? 0,
-              utmifySourceType: parseResult?.sourceType ?? null,
-              warnings: [],
-              utmifyMissingColumns: [],
-            }
-          : (apiData as UploadResult)
-      )
+      const sessionId = `local:${saved.id}`
+      setSessionId(sessionId)
+      setResult({
+        sessionId,
+        metaCount: 0,
+        metaSourceType: null,
+        utmifyCount: parseResult.rows.length,
+        utmifySourceType: parseResult.sourceType,
+        warnings: [],
+        utmifyMissingColumns: [],
+      })
       setStatus('success')
     } catch {
       setError('Falha de rede. Tente novamente.')

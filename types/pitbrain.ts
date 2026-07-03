@@ -29,6 +29,9 @@ export interface PitbrainImport {
   breakdownLevel?: BreakdownLevel
   dimensionField?: string
   dimensionLabel?: string
+  product?: string
+  funnelGroup?: string
+  tags?: string[]
   periodLabel?: string
   dateRange?: { start?: string; end?: string } | null
   rows: unknown[]
@@ -40,3 +43,7 @@ export interface PitbrainImport {
   createdAt: string
   updatedAt: string
 }
+
+export type PitbrainImportPatch = Partial<
+  Pick<PitbrainImport, 'name' | 'product' | 'funnelGroup' | 'tags' | 'periodLabel'>
+>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseClient } from '@/lib/supabase'
+import { getSupabaseAdminClient } from '@/lib/supabase'
 import { getStorageMode } from '@/lib/storage/mode'
 import { parseMetaFileText } from '@/lib/parsers/meta-parser'
 import { parseUtmifyCsv } from '@/lib/parsers/utmify-parser'
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Envie ao menos um arquivo.' }, { status: 400 })
     }
 
-    const supabase = getSupabaseClient()
+    const supabase = getSupabaseAdminClient()
     if (!supabase) {
       return NextResponse.json(
         { ok: false, storageMode: getStorageMode(), error: 'Supabase não configurado. Use o modo local.' },

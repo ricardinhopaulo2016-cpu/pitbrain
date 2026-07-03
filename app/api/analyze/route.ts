@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseClient } from '@/lib/supabase'
+import { getSupabaseAdminClient } from '@/lib/supabase'
 import { callDiagnosis } from '@/lib/openai'
 import { MissingAPIKeyError } from '@/lib/ai'
 import { SummaryMetrics } from '@/types/metrics'
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
 
     const diagnosis = await callDiagnosis(metrics)
 
-    const supabase = getSupabaseClient()
+    const supabase = getSupabaseAdminClient()
     if (supabase) {
       await supabase
         .from('diagnoses')

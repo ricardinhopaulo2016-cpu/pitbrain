@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseClient } from '@/lib/supabase'
+import { getSupabaseAdminClient } from '@/lib/supabase'
 import { getStorageMode } from '@/lib/storage/mode'
 import { calculateMetrics } from '@/lib/calculators/metrics'
 import { MetaCampaign } from '@/types/meta'
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const supabase = getSupabaseClient()
+    const supabase = getSupabaseAdminClient()
     if (!supabase) {
       return NextResponse.json(
         { ok: false, storageMode: getStorageMode(), error: 'Supabase não configurado. Use o modo local.' },
