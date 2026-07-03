@@ -37,9 +37,13 @@ export class SyncAbortedError extends Error {
 }
 
 const OAUTH_ERROR_CODE = 190 // Meta's OAuthException code — expired, revoked, or malformed token
+const PERMISSION_ERROR_CODE = 10 // Meta's "Permission Error" code — token valid but missing a scope (e.g. ads_read)
 // Meta reports rate limiting via HTTP 429, error codes 4 (app-level) / 17 (user-level),
 // or occasionally only through the message text — so all three are checked.
 const RATE_LIMIT_MESSAGE_PATTERN = /user request limit reached|application request limit reached|too many calls/i
+const PERMISSION_MESSAGE_PATTERN = /does not have permission|missing permission|permiss(ão|ões)/i
+// Meta's Session-expiry/OAuth error text — used to tell "session expired" apart from other 190s.
+const TOKEN_EXPIRED_MESSAGE_PATTERN = /session has expired|error validating access token|token.*expired|expired.*token/i
 
 export function isMetaRateLimitError(err: unknown): boolean {
   if (!(err instanceof MetaAPIError)) return false
@@ -49,8 +53,28 @@ export function isMetaRateLimitError(err: unknown): boolean {
 }
 
 function isMetaTokenError(err: unknown): boolean {
-  return err instanceof MetaAPIError && err.code === OAUTH_ERROR_CODE
+  if (!(err instanceof MetaAPIError)) return false
+  if (err.code === OAUTH_ERROR_CODE) return true
+  return TOKEN_EXPIRED_MESSAGE_PATTERN.test(err.message)
 }
+
+function isMetaPermissionError(err: unknown): boolean {
+  if (!(err instanceof MetaAPIError)) return false
+  if (err.code === PERMISSION_ERROR_CODE) return true
+  return PERMISSION_MESSAGE_PATTERN.test(err.message)
+}
+
+/** Same classification used by the sync route, exposed for the connection-check UI. */
+export type MetaConnectionStatus =
+  | 'connected'
+  | 'missing_token'
+  | 'expired_token'
+  | 'permission_error'
+  | 'rate_limited'
+  | 'unknown_error'
+
+export const META_TOKEN_RENEWAL_MESSAGE =
+  'Gere um novo token da Meta e atualize META_ACCESS_TOKEN nas variáveis de ambiente.'
 
 // Meta's Graph API returns HTTP 400 for almost every OAuthException — including a
 // merely-expired/invalid token — so the client can't tell "not configured" apart from
@@ -64,6 +88,7 @@ export type MetaErrorKind =
   | 'timeout'
   | 'cancelled'
   | 'token'
+  | 'permission_error'
 
 export interface MetaSyncErrorInfo {
   kind: MetaErrorKind
@@ -96,7 +121,14 @@ export function buildMetaSyncErrorInfo(err: unknown, abortReason?: 'timeout' | '
     return { kind: 'missing_token', title: 'Meta não configurada', message: err.message }
   }
   if (isMetaTokenError(err)) {
-    return { kind: 'token', title: 'Token sem permissão', message: 'Token sem permissão ou expirado.' }
+    return { kind: 'token', title: 'Token da Meta expirado ou inválido', message: META_TOKEN_RENEWAL_MESSAGE }
+  }
+  if (isMetaPermissionError(err)) {
+    return {
+      kind: 'permission_error',
+      title: 'Token sem permissão suficiente',
+      message: 'O token não tem a permissão ads_read. Gere um novo token com essa permissão e atualize META_ACCESS_TOKEN.',
+    }
   }
   return {
     kind: 'internal',

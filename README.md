@@ -34,37 +34,55 @@ Além dessas, o projeto também usa variáveis de IA (OpenAI/Anthropic) e Supaba
 
 > ⚠️ **Nunca commitar `.env.local` ou tokens reais.**
 
-## Modo de armazenamento (Supabase vs local)
+## Modo de armazenamento (Supabase + login vs local)
 
 O Pitbrain detecta automaticamente (`getStorageMode()`) se o Supabase está configurado e escolhe onde persistir imports, active import, etc.
 
-**Modo Supabase** (principal, quando configurado):
+**Modo Supabase** (principal — empresa/login, quando configurado):
 - Ativado quando `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` estão presentes no client, e `SUPABASE_SERVICE_ROLE_KEY` no server.
-- Imports, active import e (futuramente) meta syncs/winners ficam no banco — compartilhado entre toda a equipe.
-- Rotas de escrita (`/api/imports`, `/api/settings/active-import`) usam o client server-side com `service_role` (`getSupabaseAdminClient()`), que nunca roda no browser.
-- Schema: veja `supabase/schema.sql`. Rode esse arquivo no **SQL Editor** do painel do Supabase antes de usar o modo Supabase (cria as tabelas `pitbrain_imports`, `pitbrain_settings`, `pitbrain_meta_syncs`, `pitbrain_winners` com RLS habilitado e sem policy pública — só acessíveis via `service_role`).
+- Exige login (`/login`, `/register`) — cada usuário pertence a um **workspace** (criado automaticamente no cadastro) e só vê os dados desse workspace.
+- Imports, active import e (futuramente) meta syncs/winners ficam no banco, por workspace — compartilhado entre toda a equipe.
+- Rotas de escrita usam o client server-side com `service_role` (`getSupabaseAdminClient()`), que nunca roda no browser.
+- `middleware.ts` protege as rotas principais (`/dashboard`, `/upload`, `/imports`, etc.) — sem sessão, redireciona para `/login`.
+- Schema: veja `supabase/schema.sql` e `supabase/README.md`. Rode o schema no **SQL Editor** do Supabase antes de usar o modo Supabase.
+- `GET /api/supabase/health` informa se o Supabase está configurado e se o schema já foi instalado (`tablesReady`).
 
-**Modo local** (fallback, sem Supabase configurado ou se uma chamada ao Supabase falhar):
-- Funciona sem Supabase — nenhuma variável adicional é necessária.
+**Modo local** (fallback — sem Supabase configurado, ou se uma chamada ao Supabase falhar):
+- Funciona sem Supabase — nenhuma variável adicional é necessária, login fica indisponível.
 - Usa `localStorage` (`pitbrain:imports`, `pitbrain:activeImportId`).
 - Dados ficam apenas no navegador/dispositivo do usuário.
 - Em `/imports`, com Supabase ativo, um botão permite migrar imports salvos localmente para o Supabase (não apaga o localStorage automaticamente).
+
+## Configuração do Supabase
+
+1. Crie um projeto em [supabase.com](https://supabase.com).
+2. Copie a **Project URL** → `NEXT_PUBLIC_SUPABASE_URL`.
+3. Copie a **anon key** → `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+4. Copie a **service_role key** → `SUPABASE_SERVICE_ROLE_KEY` (secreta).
+5. Configure as três na Vercel (**Project Settings → Environment Variables**).
+6. Rode `supabase/schema.sql` no **SQL Editor** do Supabase (veja `supabase/README.md`).
+7. Faça **Redeploy** na Vercel.
 
 ## Variáveis necessárias na Vercel
 
 Configure em **Project Settings → Environment Variables**:
 
 ```
-NEXT_PUBLIC_SUPABASE_URL
-NEXT_PUBLIC_SUPABASE_ANON_KEY
-SUPABASE_SERVICE_ROLE_KEY
-META_ACCESS_TOKEN
-META_API_VERSION
-META_DEFAULT_AD_ACCOUNT_ID
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+META_ACCESS_TOKEN=
+META_API_VERSION=v25.0
+META_DEFAULT_AD_ACCOUNT_ID=
 ```
 
-> ⚠️ **Depois de alterar variáveis de ambiente na Vercel, é preciso fazer Redeploy** — a Vercel não aplica novas envs em deploys já existentes, só nos próximos builds.
+> ⚠️ **Avisos importantes**
+> - Nunca exponha `SUPABASE_SERVICE_ROLE_KEY` no client — ela só é lida em rotas server-side (`getSupabaseAdminClient()`), que lança erro se chamada no browser.
+> - Nunca commite `.env.local`.
+> - Depois de alterar variáveis de ambiente na Vercel, é preciso fazer **Redeploy** — a Vercel não aplica novas envs em deploys já existentes.
+> - Se o token da Meta expirar, gere um novo (veja "Como renovar token?" em `/meta-sync`) e atualize `META_ACCESS_TOKEN` — local e na Vercel.
 
 ## Stack
 
-Next.js (App Router) + TypeScript + Supabase (banco principal, com fallback local).
+Next.js (App Router) + TypeScript + Supabase Auth + Postgres (banco principal, com fallback local).

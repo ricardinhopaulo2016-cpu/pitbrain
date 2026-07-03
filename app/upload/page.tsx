@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { PageShell } from '@/components/layout/PageShell'
 import { CsvDropzone } from '@/components/upload/CsvDropzone'
 import { useUpload } from '@/hooks/useUpload'
+import { checkSupabaseHealth } from '@/lib/storage/pitbrain-storage'
 import { generateUtmifyPreview, FilePreviewData } from '@/lib/parsers/file-preview'
 import { DAILY_COLUMN_LABELS } from '@/lib/parsers/normalizer'
 import {
@@ -143,7 +144,13 @@ export default function UploadPage() {
   const [previewLoading, setPreviewLoading] = useState(false)
 
   const { upload, forceUpload, status, result, error, reset: resetUpload, duplicateSession, storageMode } = useUpload()
+  const [schemaReady, setSchemaReady] = useState<boolean | null>(null)
   const router = useRouter()
+
+  useEffect(() => {
+    if (storageMode !== 'supabase') return
+    checkSupabaseHealth().then(h => setSchemaReady(h.tablesReady))
+  }, [storageMode])
 
   // Generate preview when file changes
   useEffect(() => {
@@ -196,6 +203,21 @@ export default function UploadPage() {
             </p>
             <p className="text-[11px] text-pb-muted">
               Supabase não configurado. Persistência compartilhada desativada.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Supabase configured but schema not installed yet */}
+      {storageMode === 'supabase' && schemaReady === false && (
+        <div className="bg-pb-yellow/[0.07] border border-pb-yellow/20 rounded-xl p-4 flex gap-3">
+          <AlertTriangle className="h-4 w-4 text-pb-yellow shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p className="text-xs text-pb-text font-medium">
+              Supabase conectado, mas schema não instalado.
+            </p>
+            <p className="text-[11px] text-pb-muted">
+              Rode supabase/schema.sql no SQL Editor do Supabase. Até lá, este import será salvo apenas neste navegador.
             </p>
           </div>
         </div>

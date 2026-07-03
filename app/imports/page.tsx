@@ -12,6 +12,7 @@ import {
   getActiveImportId,
   setActiveImportId,
   getStorageMode,
+  checkSupabaseHealth,
 } from '@/lib/storage/pitbrain-storage'
 import { saveCurrentDataset } from '@/lib/calculators/local-metrics'
 import { useSessionStore } from '@/store/sessionStore'
@@ -257,6 +258,7 @@ export default function ImportsPage() {
   const [localImportsCount, setLocalImportsCount] = useState(0)
   const [migrating, setMigrating] = useState(false)
   const [migrationDone, setMigrationDone] = useState<number | null>(null)
+  const [schemaReady, setSchemaReady] = useState<boolean | null>(null)
   const { reset: resetSession, setSessionId } = useSessionStore()
   const router = useRouter()
   const storageMode = getStorageMode()
@@ -272,6 +274,11 @@ export default function ImportsPage() {
   }, [storageMode])
 
   useEffect(() => { refresh() }, [refresh])
+
+  useEffect(() => {
+    if (storageMode !== 'supabase') return
+    checkSupabaseHealth().then(h => setSchemaReady(h.tablesReady))
+  }, [storageMode])
 
   async function handleLoad(imp: PitbrainImport) {
     const lastImport = pitbrainImportToLastImport(imp)
@@ -354,21 +361,34 @@ export default function ImportsPage() {
       <div
         className={cn(
           'flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3',
-          storageMode === 'supabase'
+          storageMode === 'supabase' && schemaReady === false
+            ? 'bg-pb-yellow/[0.06] border border-pb-yellow/20'
+            : storageMode === 'supabase'
             ? 'bg-pb-green/[0.06] border border-pb-green/20'
             : 'bg-pb-purple/[0.06] border border-pb-purple/20'
         )}
       >
         <div className="flex items-center gap-2">
-          <Database className={cn('h-3.5 w-3.5', storageMode === 'supabase' ? 'text-pb-green' : 'text-pb-purple')} />
-          <span className="text-xs text-pb-text font-medium">
-            {storageMode === 'supabase'
-              ? 'Supabase ativo — dados compartilhados no banco.'
-              : 'Modo local — dados apenas neste navegador.'}
-          </span>
+          <Database className={cn(
+            'h-3.5 w-3.5',
+            storageMode === 'supabase' && schemaReady === false ? 'text-pb-yellow'
+              : storageMode === 'supabase' ? 'text-pb-green' : 'text-pb-purple'
+          )} />
+          <div>
+            <span className="text-xs text-pb-text font-medium block">
+              {storageMode === 'supabase' && schemaReady === false
+                ? 'Supabase conectado, mas schema não instalado.'
+                : storageMode === 'supabase'
+                ? 'Supabase ativo — dados centralizados no banco.'
+                : 'Modo local — dados apenas neste navegador.'}
+            </span>
+            {storageMode === 'supabase' && schemaReady === false && (
+              <span className="text-[11px] text-pb-muted">Rode supabase/schema.sql no SQL Editor do Supabase.</span>
+            )}
+          </div>
         </div>
 
-        {storageMode === 'supabase' && localImportsCount > 0 && (
+        {storageMode === 'supabase' && schemaReady && localImportsCount > 0 && (
           migrationDone === null ? (
             <button
               onClick={handleMigrate}

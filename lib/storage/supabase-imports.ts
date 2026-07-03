@@ -29,9 +29,14 @@ export function rowToImport(row: Record<string, unknown>): PitbrainImport {
   }
 }
 
-export function importToRow(imp: PitbrainImport): Record<string, unknown> {
+export function importToRow(
+  imp: PitbrainImport,
+  ctx: { workspaceId: string; createdBy: string }
+): Record<string, unknown> {
   return {
     id: imp.id,
+    workspace_id: ctx.workspaceId,
+    created_by: ctx.createdBy,
     name: imp.name,
     original_file_name: imp.originalFileName ?? null,
     source: imp.source ?? 'utmify',

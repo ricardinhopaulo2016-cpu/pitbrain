@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
   BarChart2,
@@ -17,8 +18,11 @@ import {
   Database,
   RefreshCw,
   EyeOff,
+  LogOut,
 } from 'lucide-react'
 import { useSessionStore } from '@/store/sessionStore'
+import { getStorageMode } from '@/lib/storage/mode'
+import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 
 const links = [
   { href: '/dashboard',    label: 'Dashboard',        icon: BarChart2  },
@@ -43,7 +47,27 @@ const futureLinks = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const { sessionId, diagnosis } = useSessionStore()
+  const storageMode = getStorageMode()
+  const [account, setAccount] = useState<{ email: string; workspaceName: string | null } | null>(null)
+
+  useEffect(() => {
+    if (storageMode !== 'supabase') return
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (data.user) setAccount({ email: data.user.email, workspaceName: data.workspaceName })
+      })
+      .catch(() => {})
+  }, [storageMode])
+
+  async function handleLogout() {
+    const supabase = getSupabaseBrowserClient()
+    await supabase?.auth.signOut()
+    router.push('/login')
+    router.refresh()
+  }
 
   const providerEnv = process.env.NEXT_PUBLIC_AI_PROVIDER ?? 'openai'
   const aiProvider = providerEnv === 'mock'
@@ -170,6 +194,25 @@ export function Sidebar() {
           })}
         </div>
       </nav>
+
+      {/* ── Account block ─────────────────────────────────────── */}
+      {storageMode === 'supabase' && account && (
+        <div className="px-4 py-3 space-y-2" style={{ borderTop: '1px solid #1A1A2E' }}>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-pb-text truncate">{account.email}</p>
+            {account.workspaceName && (
+              <p className="text-[10px] text-pb-border/70 truncate">{account.workspaceName}</p>
+            )}
+          </div>
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-2 text-[11px] text-pb-secondary hover:text-pb-red transition-colors"
+          >
+            <LogOut className="h-3 w-3" />
+            Sair
+          </button>
+        </div>
+      )}
 
       {/* ── Status footer ─────────────────────────────────────── */}
       <div className="px-4 py-4 space-y-3" style={{ borderTop: '1px solid #1A1A2E' }}>

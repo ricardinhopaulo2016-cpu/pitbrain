@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { MetricCard } from '@/components/dashboard/MetricCard'
 import {
   ShieldCheck, RefreshCw, Layers, Megaphone, Sparkles, EyeOff,
-  AlertTriangle, CheckCircle2, Wifi, WifiOff, XCircle, Loader2,
+  AlertTriangle, CheckCircle2, Wifi, WifiOff, XCircle, Loader2, HelpCircle, ChevronDown,
 } from 'lucide-react'
 import {
   getLastMetaSync, persistMetaSyncResult, getSelectedAdAccountId, setSelectedAdAccountId,
@@ -16,12 +16,16 @@ import { AdAccountCombobox } from '@/components/meta/AdAccountCombobox'
 import type { MetaAdAccount } from '@/lib/meta/meta-types'
 import type { SyncMetaAccountResult, MetaSyncScope, MetaSyncStage, MetaSyncCounts } from '@/lib/meta/meta-service'
 import { DEFAULT_SYNC_SCOPE } from '@/lib/meta/meta-service'
-import type { MetaSyncErrorInfo } from '@/lib/meta/meta-errors'
+import type { MetaSyncErrorInfo, MetaConnectionStatus } from '@/lib/meta/meta-errors'
+import { META_TOKEN_RENEWAL_MESSAGE } from '@/lib/meta/meta-errors'
+import { cn } from '@/lib/utils'
 
-type ConnectionState = 'checking' | 'missing_token' | 'invalid_token' | 'connected' | 'error'
+type ConnectionState = 'checking' | MetaConnectionStatus
 type SyncPhase = 'idle' | MetaSyncStage | 'error' | 'cancelled'
 
 const OAUTH_ERROR_CODE = 190 // Meta's OAuthException code — covers expired, revoked, or malformed tokens
+const PERMISSION_ERROR_CODE = 10
+const RATE_LIMIT_CODES = [4, 17]
 const GLOBAL_TIMEOUT_MS = 60_000
 
 const STAGE_LABELS: Record<SyncPhase, string> = {
@@ -64,6 +68,7 @@ export default function MetaSyncPage() {
   const [syncIncomplete, setSyncIncomplete] = useState(false)
   const [lastSync, setLastSync] = useState<StoredMetaSync | null>(null)
   const [scope, setScope] = useState<MetaSyncScope>(DEFAULT_SYNC_SCOPE)
+  const [showRenewalHelp, setShowRenewalHelp] = useState(false)
 
   const abortControllerRef = useRef<AbortController | null>(null)
   const cancelledRef = useRef(false)
@@ -79,9 +84,13 @@ export default function MetaSyncPage() {
         if (json.kind === 'missing_token') {
           setConnection('missing_token')
         } else if (json.kind === 'api_error' && json.code === OAUTH_ERROR_CODE) {
-          setConnection('invalid_token')
+          setConnection('expired_token')
+        } else if (json.kind === 'api_error' && json.code === PERMISSION_ERROR_CODE) {
+          setConnection('permission_error')
+        } else if (json.kind === 'api_error' && (RATE_LIMIT_CODES.includes(json.code) || res.status === 429)) {
+          setConnection('rate_limited')
         } else {
-          setConnection('error')
+          setConnection('unknown_error')
         }
         setConnectionError(json.error ?? 'Erro ao conectar com a Meta API.')
         return
@@ -92,7 +101,7 @@ export default function MetaSyncPage() {
       setDefaultAdAccountId(json.defaultAdAccountId ?? null)
       setConnection('connected')
     } catch (err) {
-      setConnection('error')
+      setConnection('unknown_error')
       setConnectionError(err instanceof Error ? err.message : 'Erro ao conectar com a Meta API.')
     }
   }, [])
@@ -143,6 +152,26 @@ export default function MetaSyncPage() {
 
   async function handleSync() {
     if (!selectedAccountId || syncing) return
+
+    // Token already known to be expired/invalid/unauthorized — abort before
+    // attempting any campaigns/adsets/ads fetch.
+    if (connection !== 'connected') {
+      setSyncError({
+        kind: connection === 'permission_error' ? 'permission_error' : connection === 'rate_limited' ? 'rate_limit' : 'token',
+        title: connection === 'permission_error'
+          ? 'Token sem permissão suficiente'
+          : connection === 'rate_limited'
+          ? 'Limite temporário da Meta atingido'
+          : 'Token da Meta expirado ou inválido',
+        message: connection === 'permission_error'
+          ? 'O token não tem a permissão ads_read. Gere um novo token com essa permissão.'
+          : connection === 'rate_limited'
+          ? 'Aguarde alguns minutos antes de tentar novamente.'
+          : META_TOKEN_RENEWAL_MESSAGE,
+      })
+      setSyncPhase('error')
+      return
+    }
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -260,7 +289,12 @@ export default function MetaSyncPage() {
         title="Meta Sync"
         chips={[
           {
-            label: connection === 'connected' ? 'Conectado' : connection === 'invalid_token' ? 'Token expirado' : 'Sem conexão',
+            label: connection === 'connected' ? 'Conectado'
+              : connection === 'expired_token' ? 'Token expirado'
+              : connection === 'permission_error' ? 'Sem permissão'
+              : connection === 'rate_limited' ? 'Limite atingido'
+              : connection === 'missing_token' ? 'Não configurado'
+              : 'Sem conexão',
             icon: connection === 'connected' ? Wifi : WifiOff,
           },
           ...(selectedAccountId ? [{ label: selectedAccountId }] : []),
@@ -280,6 +314,29 @@ export default function MetaSyncPage() {
         </p>
       </div>
 
+      {/* "How to renew token?" — always available, doesn't depend on connection state */}
+      <div className="rounded-xl border border-pb-border overflow-hidden">
+        <button
+          onClick={() => setShowRenewalHelp(v => !v)}
+          className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-pb-card hover:bg-pb-card-alt transition-colors"
+        >
+          <span className="flex items-center gap-2 text-sm text-pb-text font-medium">
+            <HelpCircle className="h-4 w-4 text-pb-purple" />
+            Como renovar token?
+          </span>
+          <ChevronDown className={cn('h-4 w-4 text-pb-muted transition-transform', showRenewalHelp && 'rotate-180')} />
+        </button>
+        {showRenewalHelp && (
+          <ol className="px-4 py-4 space-y-2 text-xs text-pb-muted bg-pb-card-alt list-decimal list-inside">
+            <li>Acesse <span className="text-pb-text">Meta Developers → Graph API Explorer</span>.</li>
+            <li>Selecione o app <span className="text-pb-text">Pitbrain</span>.</li>
+            <li>Adicione a permissão <span className="text-pb-text font-mono">ads_read</span>.</li>
+            <li>Gere o novo token.</li>
+            <li>Atualize a variável <span className="text-pb-text font-mono">META_ACCESS_TOKEN</span>.</li>
+          </ol>
+        )}
+      </div>
+
       {/* Connection / account status */}
       {connection === 'missing_token' && (
         <div className="flex items-start gap-3 rounded-xl px-4 py-4" style={{ background: 'rgba(250, 204, 21, 0.06)', border: '1px solid rgba(250, 204, 21, 0.25)' }}>
@@ -293,19 +350,45 @@ export default function MetaSyncPage() {
         </div>
       )}
 
-      {connection === 'invalid_token' && (
+      {connection === 'expired_token' && (
+        <div className="flex items-start gap-3 rounded-xl px-4 py-4" style={{ background: 'rgba(250, 204, 21, 0.06)', border: '1px solid rgba(250, 204, 21, 0.25)' }}>
+          <AlertTriangle className="h-4 w-4 text-pb-yellow shrink-0 mt-0.5" />
+          <div className="space-y-2">
+            <div>
+              <p className="text-sm font-semibold text-pb-text">Token da Meta expirado ou inválido</p>
+              <p className="text-xs text-pb-muted mt-1">{META_TOKEN_RENEWAL_MESSAGE}</p>
+            </div>
+            <div className="text-[11px] text-pb-muted space-y-0.5">
+              <p><span className="text-pb-text font-medium">Local:</span> atualize .env.local e reinicie <span className="font-mono">npm run dev</span>.</p>
+              <p><span className="text-pb-text font-medium">Vercel:</span> Project Settings → Environment Variables → META_ACCESS_TOKEN e faça Redeploy.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {connection === 'permission_error' && (
         <div className="flex items-start gap-3 rounded-xl px-4 py-4" style={{ background: 'rgba(250, 204, 21, 0.06)', border: '1px solid rgba(250, 204, 21, 0.25)' }}>
           <AlertTriangle className="h-4 w-4 text-pb-yellow shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-semibold text-pb-text">Token da Meta expirado ou inválido</p>
+            <p className="text-sm font-semibold text-pb-text">Token sem permissão suficiente</p>
             <p className="text-xs text-pb-muted mt-1">
-              {connectionError ?? 'O access token configurado não é mais válido.'} Gere um novo token e atualize META_ACCESS_TOKEN no .env.local.
+              {connectionError ?? 'O token não tem a permissão ads_read.'} Gere um novo token com essa permissão e atualize META_ACCESS_TOKEN.
             </p>
           </div>
         </div>
       )}
 
-      {connection === 'error' && (
+      {connection === 'rate_limited' && (
+        <div className="flex items-start gap-3 rounded-xl px-4 py-4" style={{ background: 'rgba(250, 204, 21, 0.06)', border: '1px solid rgba(250, 204, 21, 0.25)' }}>
+          <AlertTriangle className="h-4 w-4 text-pb-yellow shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-pb-text">Limite temporário da Meta atingido</p>
+            <p className="text-xs text-pb-muted mt-1">Aguarde 30–60 minutos antes de tentar novamente.</p>
+          </div>
+        </div>
+      )}
+
+      {connection === 'unknown_error' && (
         <div className="flex items-start gap-3 rounded-xl px-4 py-4" style={{ background: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
           <AlertTriangle className="h-4 w-4 text-pb-red shrink-0 mt-0.5" />
           <div>
