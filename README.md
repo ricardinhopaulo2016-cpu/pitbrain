@@ -75,6 +75,20 @@ Para dar acesso a alguém:
 2. Adicione o e-mail em `PITBRAIN_ALLOWED_EMAILS` na Vercel (separado por vírgula se houver mais de um).
 3. Faça **Redeploy** na Vercel.
 
+## Variáveis obrigatórias para login na Vercel
+
+```
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
+SUPABASE_SERVICE_ROLE_KEY
+PITBRAIN_ALLOWED_EMAILS
+```
+
+> ⚠️ Depois de alterar Environment Variables na Vercel, faça **Redeploy**. Variáveis `NEXT_PUBLIC_*`
+> são embutidas no build (client bundle) — só passam a valer no próximo deploy, nunca em um já existente.
+> Se `NEXT_PUBLIC_SUPABASE_URL` ou `NEXT_PUBLIC_SUPABASE_ANON_KEY` estiverem ausentes, a tela `/login`
+> mostra um diagnóstico indicando qual das duas falta, sem nunca exibir os valores.
+
 ## Variáveis necessárias na Vercel
 
 Configure em **Project Settings → Environment Variables**:
