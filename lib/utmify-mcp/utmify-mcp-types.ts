@@ -63,9 +63,24 @@ export interface McpToolCallResult {
   structuredContent?: unknown
 }
 
-/** A tool annotated with PitBrain's own read-only classification (lib/utmify-mcp/utmify-mcp-service.ts) — never trust the remote server's own description alone for this. */
+/** Result of PitBrain's own read-only classification (lib/utmify-mcp/utmify-mcp-service.ts's
+ * classifyMcpTool) — never trust the remote server's own description alone for this.
+ * - read_only: safe to call automatically (name prefix matches a known read verb, or explicitly
+ *   allowlisted).
+ * - blocked: name prefix matches a known write/mutate verb — never callable.
+ * - review_required: name looks read-only, but the description explicitly says the tool
+ *   creates/deletes/updates/sends/mutates data — not auto-callable until a human confirms it.
+ * - unknown: name doesn't match any known prefix — not auto-callable, deny-by-default. */
+export type ToolSafety = 'read_only' | 'blocked' | 'review_required' | 'unknown'
+
+/** A tool annotated with PitBrain's own read-only classification. */
 export interface ClassifiedMcpTool extends McpTool {
-  readOnly: boolean
+  safety: ToolSafety
+  /** true when the classification is either an explicit allowlist hit or matched a known blocked
+   * prefix (high confidence) — false when it's a generic "name looks like a read verb, never seen
+   * before" inference (still auto-callable if safety is read_only, but the UI marks it
+   * "não revisada" so a human can confirm it later). */
+  reviewed: boolean
 }
 
 // ── Future import prep (not wired into the real import pipeline yet — see

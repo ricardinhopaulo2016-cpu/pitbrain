@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import type { ToolSafety } from './utmify-mcp-types'
 
 export class MissingUtmifyMcpUrlError extends Error {
   constructor(message = 'Configure UTMIFY_MCP_URL nas variáveis de ambiente.') {
@@ -19,11 +20,15 @@ export class UtmifyMcpConnectionError extends Error {
   }
 }
 
-/** Thrown when a caller tries to invoke a tool that didn't pass the read-only classifier. */
+/** Thrown when a caller tries to invoke a tool that didn't pass the read-only classifier — covers
+ * blocked, review_required, and unknown alike (only read_only is auto-callable in this MVP). */
 export class UtmifyMcpToolBlockedError extends Error {
-  constructor(toolName: string) {
-    super(`Ferramenta MCP bloqueada por segurança: ${toolName}.`)
+  readonly safety?: ToolSafety
+
+  constructor(toolName: string, safety?: ToolSafety) {
+    super(`Ferramenta MCP bloqueada por segurança: ${toolName}${safety ? ` (status: ${safety})` : ''}.`)
     this.name = 'UtmifyMcpToolBlockedError'
+    this.safety = safety
   }
 }
 

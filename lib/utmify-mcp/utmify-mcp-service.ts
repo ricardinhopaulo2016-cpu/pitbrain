@@ -3,22 +3,54 @@ import { MissingUtmifyMcpUrlError, UtmifyMcpConnectionError, UtmifyMcpToolBlocke
 import type { ClassifiedMcpTool, McpTool, McpToolCallResult, UtmifyMcpImportRequest } from './utmify-mcp-types'
 import type { PitbrainImport, PitbrainImportSummary } from '@/types/pitbrain'
 
-// Any of these anywhere in a tool's name/description blocks it outright, regardless of what else
-// matches — mirrors the read-only stance of lib/meta/meta-service.ts's write-action stubs, but
-// applied dynamically since (unlike Meta's fixed internal API surface) the UTMify MCP tool list is
-// whatever the remote server reports and isn't known ahead of time.
-const WRITE_KEYWORD_PATTERN = /\b(create|update|delete|remove|mutate|send|post|write)\b/i
+// Tools known ahead of time to be safe, read-only UTMify MCP calls — always classified read_only
+// and "reviewed" (a human, not just a heuristic, vouches for these) regardless of what the prefix/
+// description-based classifier below would otherwise say.
+export const UTMIFY_MCP_READ_ONLY_ALLOWLIST = ['get_dashboards', 'get_dashboard_summary', 'get_meta_ad_objects']
 
-// A tool must look read-only (one of these) AND not match the block pattern above to be classified
-// read-only — deny-by-default for anything that doesn't clearly announce itself as a read/list/
-// fetch-style operation.
-const READ_ONLY_KEYWORD_PATTERN = /\b(get|list|search|fetch|report|metrics|orders|sales|campaigns|utms)\b/i
+// Classification is prefix-based on the tool *name*, not a keyword scan over the whole
+// name+description — the previous classifier scanned `\b(get|list|...)\b` over the full
+// description text, which has two problems: (1) `\b` doesn't split on `_`, so `\bget\b` never
+// matches inside `get_dashboards` (both sides of the "boundary" are word characters), silently
+// failing to recognize the exact underscore-joined naming convention UTMify's MCP server uses;
+// (2) scanning the description for bare words like "delete"/"set_"/"allowed" flags a tool as
+// unsafe just because its *response* happens to contain a field with that name, not because the
+// tool itself does anything mutable. `startsWith()` on the name avoids both.
+const READ_ONLY_PREFIXES = ['get_', 'list_', 'fetch_', 'search_', 'read_', 'report_', 'summarize_', 'query_']
+const BLOCKED_PREFIXES = [
+  'create_', 'update_', 'delete_', 'remove_', 'set_', 'send_', 'post_', 'mutate_', 'write_', 'upsert_', 'patch_',
+]
 
-function classifyTool(tool: McpTool): ClassifiedMcpTool {
-  const haystack = `${tool.name} ${tool.description ?? ''}`
-  const blocked = WRITE_KEYWORD_PATTERN.test(haystack)
-  const looksReadOnly = READ_ONLY_KEYWORD_PATTERN.test(haystack)
-  return { ...tool, readOnly: looksReadOnly && !blocked }
+// Deliberately narrow: only trips on a strong, explicit statement about what the tool itself does
+// ("cria/deleta/atualiza ... dados/registro/campanha"), not a bare keyword — this is what replaces
+// the old whole-description keyword scan without reintroducing its false positives. A read_only-
+// looking name that matches this becomes review_required, not blocked outright, since the name
+// itself is still a strong (if contradicted) signal.
+const MUTATION_DESCRIPTION_PATTERN =
+  /\b(cria|criar|deleta|deletar|exclui|excluir|apaga|apagar|remove|remover|atualiza|atualizar|modifica|modificar|altera|alterar|envia|enviar|muta|mutar)\b[^.]{0,60}\b(dado|dados|registro|registros|campanha|pedido|configuraç\w*|dashboard|relatório)\b/i
+
+export function classifyMcpTool(tool: McpTool): ClassifiedMcpTool {
+  if (UTMIFY_MCP_READ_ONLY_ALLOWLIST.includes(tool.name)) {
+    return { ...tool, safety: 'read_only', reviewed: true }
+  }
+
+  const name = tool.name.toLowerCase()
+
+  if (BLOCKED_PREFIXES.some(prefix => name.startsWith(prefix))) {
+    return { ...tool, safety: 'blocked', reviewed: true }
+  }
+
+  if (READ_ONLY_PREFIXES.some(prefix => name.startsWith(prefix))) {
+    if (tool.description && MUTATION_DESCRIPTION_PATTERN.test(tool.description)) {
+      return { ...tool, safety: 'review_required', reviewed: true }
+    }
+    // A get_/list_/etc. tool never seen before — still safe to auto-call, but the UI marks it
+    // "não revisada" so a human eventually confirms it, since it wasn't hand-vetted like the
+    // allowlist above.
+    return { ...tool, safety: 'read_only', reviewed: false }
+  }
+
+  return { ...tool, safety: 'unknown', reviewed: false }
 }
 
 export interface UtmifyMcpStatus {
@@ -49,16 +81,17 @@ export async function getMcpStatus(): Promise<UtmifyMcpStatus> {
 export async function listClassifiedTools(): Promise<ClassifiedMcpTool[]> {
   const client = getUtmifyMcpClient()
   const tools = await client.listTools()
-  return tools.map(classifyTool)
+  return tools.map(classifyMcpTool)
 }
 
-/** Calls a tool only if it passes the read-only classifier — throws UtmifyMcpToolBlockedError otherwise. Re-fetches and re-classifies the tool list on every call rather than trusting a cached/client-supplied classification, since the tool list is server-controlled and could change. */
+/** Calls a tool only if it classifies as read_only — throws UtmifyMcpToolBlockedError for blocked, review_required, AND unknown tools alike (all three are non-callable in this MVP). Re-fetches and re-classifies the tool list on every call rather than trusting a cached/client-supplied classification, since the tool list is server-controlled and could change. */
 export async function callReadOnlyTool(name: string, args?: Record<string, unknown>): Promise<McpToolCallResult> {
   const client = getUtmifyMcpClient()
   const tools = await client.listTools()
   const tool = tools.find(t => t.name === name)
-  if (!tool || !classifyTool(tool).readOnly) {
-    throw new UtmifyMcpToolBlockedError(name)
+  const classified = tool ? classifyMcpTool(tool) : null
+  if (!classified || classified.safety !== 'read_only') {
+    throw new UtmifyMcpToolBlockedError(name, classified?.safety)
   }
   return client.callTool(name, args)
 }
@@ -107,6 +140,17 @@ export function createImportFromUtmifyMcpResult(
     rowCount: 0,
     ignoredFooterRowsCount: 0,
   }
+}
+
+/**
+ * Placeholder — specific to `get_dashboard_summary`'s result shape, which isn't confirmed yet
+ * (UTMIFY_MCP_URL hasn't been testable against the real server in this session). Once it is, map
+ * its fields into a PitbrainImportSummary the same way lib/parsers/utmify-parser.ts does for CSV
+ * rows, reusing lib/utmify-mcp/utmify-mcp-normalizers.ts's re-exported BR money/percent/count
+ * parsers — do not hand-roll a second parser here. Returns null until then.
+ */
+export function normalizeUtmifyMcpSummaryToImport(_result: McpToolCallResult): Partial<PitbrainImport> | null {
+  return null
 }
 
 export { MissingUtmifyMcpUrlError, UtmifyMcpConnectionError, UtmifyMcpToolBlockedError }
