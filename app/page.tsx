@@ -79,27 +79,17 @@ export default async function HomePage() {
             {/* CTAs */}
             <div className="flex items-center gap-3 flex-wrap">
               {storageMode === 'supabase' && !user ? (
-                <>
-                  <Link
-                    href="/login"
-                    className="inline-flex items-center gap-2 text-white font-bold px-5 py-2.5 rounded-xl text-sm transition-all hover:opacity-90 active:scale-[0.98]"
-                    style={{
-                      background: 'linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)',
-                      boxShadow: '0 0 0 1px rgba(124,58,237,0.4), 0 6px 20px rgba(124,58,237,0.25)',
-                    }}
-                  >
-                    <LogIn className="h-4 w-4" />
-                    Entrar
-                  </Link>
-                  <Link
-                    href="/register"
-                    className="inline-flex items-center gap-2 font-medium px-5 py-2.5 rounded-xl text-sm transition-all hover:text-pb-text"
-                    style={{ color: '#94A3B8', border: '1px solid rgba(42,42,64,0.8)' }}
-                  >
-                    Criar conta
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
-                </>
+                <Link
+                  href="/login"
+                  className="inline-flex items-center gap-2 text-white font-bold px-5 py-2.5 rounded-xl text-sm transition-all hover:opacity-90 active:scale-[0.98]"
+                  style={{
+                    background: 'linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)',
+                    boxShadow: '0 0 0 1px rgba(124,58,237,0.4), 0 6px 20px rgba(124,58,237,0.25)',
+                  }}
+                >
+                  <LogIn className="h-4 w-4" />
+                  Entrar
+                </Link>
               ) : storageMode === 'supabase' && user ? (
                 <Link
                   href="/dashboard"

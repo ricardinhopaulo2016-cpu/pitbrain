@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, Suspense } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import Link from 'next/link'
 import { getSupabaseBrowserClient } from '@/lib/supabase-browser'
 import { AlertCircle, Loader2, Brain } from 'lucide-react'
+
+const UNAUTHORIZED_MESSAGE = 'Acesso não autorizado. Este e-mail não tem permissão para acessar o Pitbrain.'
 
 function LoginForm() {
   const [email, setEmail] = useState('')
@@ -13,6 +14,10 @@ function LoginForm() {
   const [loading, setLoading] = useState(false)
   const router = useRouter()
   const searchParams = useSearchParams()
+
+  useEffect(() => {
+    if (searchParams.get('error') === 'unauthorized') setError(UNAUTHORIZED_MESSAGE)
+  }, [searchParams])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -88,13 +93,6 @@ function LoginForm() {
           >
             {loading ? <><Loader2 className="h-4 w-4 animate-spin" />Entrando…</> : 'Entrar'}
           </button>
-
-          <p className="text-center text-xs text-pb-muted">
-            Não tem conta?{' '}
-            <Link href="/register" className="text-pb-purple hover:text-pb-purple/80 font-medium">
-              Criar conta
-            </Link>
-          </p>
         </form>
       </div>
     </div>

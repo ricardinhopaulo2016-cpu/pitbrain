@@ -40,7 +40,7 @@ O Pitbrain detecta automaticamente (`getStorageMode()`) se o Supabase está conf
 
 **Modo Supabase** (principal — empresa/login, quando configurado):
 - Ativado quando `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` estão presentes no client, e `SUPABASE_SERVICE_ROLE_KEY` no server.
-- Exige login (`/login`, `/register`) — cada usuário pertence a um **workspace** (criado automaticamente no cadastro) e só vê os dados desse workspace.
+- Exige login (`/login`) — **cadastro público está desativado** (`/register` só mostra "Cadastro desativado"). Acesso restrito aos e-mails listados em `PITBRAIN_ALLOWED_EMAILS` (veja "Acesso restrito" abaixo). Cada usuário pertence a um **workspace** (criado automaticamente ao ser criado no Supabase Auth) e só vê os dados desse workspace.
 - Imports, active import e (futuramente) meta syncs/winners ficam no banco, por workspace — compartilhado entre toda a equipe.
 - Rotas de escrita usam o client server-side com `service_role` (`getSupabaseAdminClient()`), que nunca roda no browser.
 - `middleware.ts` protege as rotas principais (`/dashboard`, `/upload`, `/imports`, etc.) — sem sessão, redireciona para `/login`.
@@ -63,6 +63,18 @@ O Pitbrain detecta automaticamente (`getStorageMode()`) se o Supabase está conf
 6. Rode `supabase/schema.sql` no **SQL Editor** do Supabase (veja `supabase/README.md`).
 7. Faça **Redeploy** na Vercel.
 
+## Acesso restrito
+
+O Pitbrain **não permite cadastro público**. Só quem estiver em `PITBRAIN_ALLOWED_EMAILS` consegue logar —
+qualquer outro e-mail é deslogado automaticamente com a mensagem "Acesso não autorizado. Este e-mail não
+tem permissão para acessar o Pitbrain.", tanto nas páginas quanto nas rotas de API internas.
+
+Para dar acesso a alguém:
+
+1. Crie o usuário manualmente no **Supabase Dashboard → Authentication → Users → Add user** (defina a senha lá; o Pitbrain nunca lida com senha hardcoded).
+2. Adicione o e-mail em `PITBRAIN_ALLOWED_EMAILS` na Vercel (separado por vírgula se houver mais de um).
+3. Faça **Redeploy** na Vercel.
+
 ## Variáveis necessárias na Vercel
 
 Configure em **Project Settings → Environment Variables**:
@@ -72,6 +84,8 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 
+PITBRAIN_ALLOWED_EMAILS=
+
 META_ACCESS_TOKEN=
 META_API_VERSION=v25.0
 META_DEFAULT_AD_ACCOUNT_ID=
@@ -80,6 +94,7 @@ META_DEFAULT_AD_ACCOUNT_ID=
 > ⚠️ **Avisos importantes**
 > - Nunca exponha `SUPABASE_SERVICE_ROLE_KEY` no client — ela só é lida em rotas server-side (`getSupabaseAdminClient()`), que lança erro se chamada no browser.
 > - Nunca commite `.env.local`.
+> - Nenhum e-mail ou senha fica hardcoded no código — o acesso é 100% controlado pela env `PITBRAIN_ALLOWED_EMAILS` + pelos usuários criados no Supabase Auth.
 > - Depois de alterar variáveis de ambiente na Vercel, é preciso fazer **Redeploy** — a Vercel não aplica novas envs em deploys já existentes.
 > - Se o token da Meta expirar, gere um novo (veja "Como renovar token?" em `/meta-sync`) e atualize `META_ACCESS_TOKEN` — local e na Vercel.
 

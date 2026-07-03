@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { isEmailAllowed } from '@/lib/auth/allowed-emails'
 
 /**
  * Refreshes the Supabase session cookie for the current request and reports
@@ -30,5 +31,12 @@ export async function updateSession(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser()
 
-  return { response, user, configured: true as const }
+  if (user && !isEmailAllowed(user.email)) {
+    // Valid Supabase session, but not on the allowlist — sign out immediately
+    // instead of letting them use the app.
+    await supabase.auth.signOut()
+    return { response, user: null, configured: true as const, unauthorized: true }
+  }
+
+  return { response, user, configured: true as const, unauthorized: false }
 }

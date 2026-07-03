@@ -1,6 +1,7 @@
 import type { User } from '@supabase/supabase-js'
 import { getSupabaseServerClient } from '@/lib/supabase-server'
 import { getSupabaseAdminClient } from '@/lib/supabase'
+import { isEmailAllowed } from '@/lib/auth/allowed-emails'
 
 export class AuthRequiredError extends Error {
   constructor() {
@@ -16,13 +17,19 @@ export class WorkspaceRequiredError extends Error {
   }
 }
 
-/** Current logged-in user (server-side), or null if unauthenticated / Supabase not configured. */
+/**
+ * Current logged-in user (server-side), or null if unauthenticated, Supabase
+ * not configured, or the session's email isn't in PITBRAIN_ALLOWED_EMAILS —
+ * a disallowed email is treated exactly like "not logged in" everywhere
+ * (APIs return 401, protected pages redirect to /login).
+ */
 export async function getCurrentUser(): Promise<User | null> {
   const supabase = await getSupabaseServerClient()
   if (!supabase) return null
 
   const { data, error } = await supabase.auth.getUser()
   if (error || !data.user) return null
+  if (!isEmailAllowed(data.user.email)) return null
   return data.user
 }
 

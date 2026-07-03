@@ -10,10 +10,16 @@ const PROTECTED_PREFIXES = [
 const AUTH_PAGES = ['/login', '/register']
 
 export async function middleware(request: NextRequest) {
-  const { response, user, configured } = await updateSession(request)
+  const { response, user, configured, unauthorized } = await updateSession(request)
 
   // Supabase not configured — local mode fallback, no auth gate.
   if (!configured) return response
+
+  if (unauthorized) {
+    const loginUrl = new URL('/login', request.url)
+    loginUrl.searchParams.set('error', 'unauthorized')
+    return NextResponse.redirect(loginUrl)
+  }
 
   const path = request.nextUrl.pathname
   const isProtected = PROTECTED_PREFIXES.some(p => path === p || path.startsWith(`${p}/`))
